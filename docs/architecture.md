@@ -117,6 +117,11 @@ action.
   the surface from live focus at click time; that is the trade recorded in
   the experiment doc, and the hybrid that restores it is sketched there.
 - Clicks beyond the 120s window, or after a Steam restart, do nothing.
+- On Windows, a live-banner click asks the built-in `WScript.Shell` to
+  foreground an existing Steam window while protocol activation independently
+  replays the click. A later Notification Center click still navigates but
+  does not foreground; supporting that needs a resident broker or registered
+  COM activator (`docs/platforms.md`).
 - The desktop popup is the whole click window: quickshell 1.2 expires it
   after ~8s despite `-t 0` and the action dies with it (the
   notification-centre copy is inert). Orthogonal to the plugin, but it

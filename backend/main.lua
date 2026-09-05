@@ -229,12 +229,13 @@ local notify_seq = 0
 --- helper blocks for the popup's lifetime, and this backend's single event
 --- loop must keep answering the frontend's polls meanwhile.
 ---
---- Windows (EXPERIMENTAL, unvalidated on real hardware; docs/platforms.md
---- lists the checks): the five slots travel as a <id>.notify JSON file --
+--- Windows (EXPERIMENTAL; docs/platforms.md lists the hardware checks): the
+--- five slots travel as a <id>.notify JSON file --
 --- a file, not a command line, so quoting stays out of the contract -- and
 --- notify-action.ps1 is started through CreateProcessW above. The helper
---- shows the toast and exits; a click comes back through the snn: URI
---- scheme's handler, not through a waiting process.
+--- waits for a routed live banner's activation, dismissal, or timeout so it
+--- can foreground Steam. Navigation comes back independently through Steam's
+--- own steam:// URL handling, including later Notification Center clicks.
 ---
 --- macOS: not implemented. sh is there but notify-send and gdbus are not;
 --- the helper would fail on its own, and does so loudly, but nothing is
@@ -497,9 +498,9 @@ local function on_load()
     migrate_legacy_settings()
     publish_steam_dir()
 
-    -- Each platform materializes what it runs: the sh helper on Linux, the
-    -- PowerShell helper plus the snn: click handler on Windows (registered
-    -- by the helper's -Setup, re-run at every load, idempotent). macOS has
+    -- Each platform materializes what it runs: the sh helper on Linux and the
+    -- PowerShell helper on Windows (-Setup registers its AUMID at every load,
+    -- idempotently). macOS has
     -- no delivery yet and says so once here, and again per dropped
     -- notification, so neither end is ever silent.
     if IS_MACOS then
@@ -514,8 +515,8 @@ local function on_load()
                 .. " -- notifications will not be delivered")
         end
         if IS_WINDOWS and helper then
-            log_line("info", "windows delivery is EXPERIMENTAL and unvalidated"
-                .. " -- docs/platforms.md lists the checks")
+            log_line("info", "windows delivery is EXPERIMENTAL"
+                .. " -- docs/platforms.md lists the tested surface")
             if not spawn_windows_helper("-Setup") then
                 log_line("error", "helper -Setup could not run"
                     .. " -- toasts may be unbranded")

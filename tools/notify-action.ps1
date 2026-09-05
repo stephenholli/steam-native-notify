@@ -1,15 +1,16 @@
 # Deliver one Steam notification as a Windows toast, and register what a
-# click needs. EXPERIMENTAL: nothing in this file has run on a real Windows
-# machine yet; docs/platforms.md lists the validation pass.
+# click needs. EXPERIMENTAL: validated on one Windows 11 VM;
+# docs/platforms.md records the tested surface and remaining gaps.
 #
 # Windows PowerShell 5.1 only: pwsh (6+) removed WinRT projection support
 # entirely, so [Windows.UI.Notifications...] type activation throws there.
 #
 # Spawned by backend/main.lua (CreateProcessW, CREATE_NO_WINDOW), one process
-# per notification, exiting right after Show(): clicks are not waited for.
-# The toast carries activationType="protocol" launching steam://snn/replay/...,
-# which Steam hands to the client's JS, where frontend/steamurl.ts invokes the
-# stashed handler -- no resident process, no COM activator, no vendored binary.
+# per notification. A routed toast waits while its live banner can report
+# activation; unrouted toasts exit after Show(). The toast carries
+# activationType="protocol" launching steam://snn/replay/..., which Steam hands
+# to the client's JS. The activation callback only foregrounds Steam through
+# Windows' built-in WScript.Shell; no registered COM activator or binary.
 #
 # Usage: notify-action.ps1 -Setup            register AUMID branding (idempotent)
 #        notify-action.ps1 -Teardown         remove the registration and the icon
@@ -199,14 +200,160 @@ $Icon = Limit-IconSize (Resolve-Icon ([string]$Payload.image))
 
 function Esc([string]$Text) { [System.Security.SecurityElement]::Escape($Text) }
 
-# activationType="protocol": Windows launches the URI on a click, banner or
-# Action Center, with no process of ours alive. The scheme is Steam's own --
-# measured on Windows 11 (docs/platforms.md), a toast will launch schemes
-# Windows already knows (ms-settings:, http:, steam:) and silently refuses
-# one this plugin registers itself, however it is registered. Steam hands
-# steam://snn/... to the client's JS, where frontend/steamurl.ts invokes the
-# stashed handler. No route means the toast is deliberately inert, mirroring
-# Steam's own.
+$FocusSinkSource = @'
+using System;
+using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+
+public static class SnnToastFocus
+{
+    private delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
+    private static readonly ManualResetEventSlim Signal = new ManualResetEventSlim(false);
+    private static string result;
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
+
+    public static string Result
+    {
+        get { return result; }
+    }
+
+    public static void Reset()
+    {
+        result = "waiting";
+        Signal.Reset();
+    }
+
+    private static void Complete(string value)
+    {
+        if (Interlocked.CompareExchange(ref result, value, "waiting") == "waiting")
+        {
+            Signal.Set();
+        }
+    }
+
+    private static int FindSteamWindowProcessId()
+    {
+        int found = 0;
+        EnumWindows(delegate(IntPtr window, IntPtr parameter)
+        {
+            if (!IsWindowVisible(window))
+            {
+                return true;
+            }
+
+            StringBuilder title = new StringBuilder(256);
+            GetWindowText(window, title, title.Capacity);
+            if (!String.Equals(title.ToString(), "Steam", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            uint processId;
+            GetWindowThreadProcessId(window, out processId);
+            try
+            {
+                Process process = Process.GetProcessById((int)processId);
+                if (String.Equals(process.ProcessName, "steamwebhelper",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    found = (int)processId;
+                    return false;
+                }
+            }
+            catch {}
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    private static bool AppActivate(int processId)
+    {
+        object shell = null;
+        try
+        {
+            Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType == null)
+            {
+                return false;
+            }
+            shell = Activator.CreateInstance(shellType);
+            object activated = shellType.InvokeMember(
+                "AppActivate",
+                BindingFlags.InvokeMethod,
+                null,
+                shell,
+                new object[] { processId }
+            );
+            return activated is bool && (bool)activated;
+        }
+        finally
+        {
+            if (shell != null && Marshal.IsComObject(shell))
+            {
+                Marshal.FinalReleaseComObject(shell);
+            }
+        }
+    }
+
+    public static void OnActivated(object sender, object arguments)
+    {
+        try
+        {
+            int processId = FindSteamWindowProcessId();
+            if (processId == 0)
+            {
+                Complete("activated target-missing");
+                return;
+            }
+            Complete(AppActivate(processId)
+                ? "activated foregrounded"
+                : "activated focus-failed");
+        }
+        catch (Exception error)
+        {
+            Complete("activated focus-error: " + error.GetType().Name);
+        }
+    }
+
+    public static void OnDismissed(object sender, object arguments)
+    {
+        Complete("dismissed");
+    }
+
+    public static void OnFailed(object sender, object arguments)
+    {
+        Complete("failed");
+    }
+
+    public static bool Wait(int milliseconds)
+    {
+        return Signal.Wait(milliseconds);
+    }
+}
+'@
+
+# activationType="protocol": Windows launches the URI on a banner or Action
+# Center click. The scheme is Steam's own -- measured on Windows 11, a toast
+# launches schemes Windows already knows (ms-settings:, http:, steam:) and
+# silently refuses one this plugin registers itself. Steam hands steam://snn/...
+# to the client's JS, where frontend/steamurl.ts invokes the stashed handler.
+# The live helper also receives Activated and asks Windows to foreground Steam;
+# Action Center remains protocol-only after that helper exits. No route means
+# the toast is deliberately inert, mirroring Steam's own.
 $ToastAttrs = ''
 if ($Route -match '^replay:([A-Za-z0-9_.\-]+)$') {
     $ToastAttrs = " activationType=`"protocol`" launch=`"steam://snn/replay/$($Matches[1])`""
@@ -228,7 +375,42 @@ try {
     $doc = New-Object Windows.Data.Xml.Dom.XmlDocument
     $doc.LoadXml($Xml)
     $toast = New-Object Windows.UI.Notifications.ToastNotification $doc
+    $FocusBound = $false
+    if ($Route -match '^replay:[A-Za-z0-9_.\-]+$') {
+        try {
+            Add-Type -TypeDefinition $FocusSinkSource
+            [SnnToastFocus]::Reset()
+
+            $activatedEvent = $toast.GetType().GetEvent('Activated')
+            $activatedMethod = [SnnToastFocus].GetMethod('OnActivated')
+            $activatedHandler = [Delegate]::CreateDelegate(
+                $activatedEvent.EventHandlerType, $activatedMethod)
+            $activatedToken = $toast.add_Activated($activatedHandler)
+
+            $dismissedEvent = $toast.GetType().GetEvent('Dismissed')
+            $dismissedMethod = [SnnToastFocus].GetMethod('OnDismissed')
+            $dismissedHandler = [Delegate]::CreateDelegate(
+                $dismissedEvent.EventHandlerType, $dismissedMethod)
+            $dismissedToken = $toast.add_Dismissed($dismissedHandler)
+
+            $failedEvent = $toast.GetType().GetEvent('Failed')
+            $failedMethod = [SnnToastFocus].GetMethod('OnFailed')
+            $failedHandler = [Delegate]::CreateDelegate(
+                $failedEvent.EventHandlerType, $failedMethod)
+            $failedToken = $toast.add_Failed($failedHandler)
+            $FocusBound = $true
+        } catch {
+            Write-PluginLog "focus: callback unavailable, protocol-only: $($_.Exception.Message)"
+        }
+    }
     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($Aumid).Show($toast)
+    if ($FocusBound) {
+        if ([SnnToastFocus]::Wait(120000)) {
+            Write-PluginLog "focus: $([SnnToastFocus]::Result)"
+        } else {
+            Write-PluginLog 'focus: timeout'
+        }
+    }
 } catch {
     if ($_.Exception.Message -match 'notification platform') {
         New-Item -ItemType File -Path $Backoff -Force | Out-Null
