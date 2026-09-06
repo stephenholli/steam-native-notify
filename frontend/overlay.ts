@@ -24,15 +24,17 @@ let overlayStore: any;
  * overlay-context toast while the game was backgrounded), so the click bridge
  * re-checks focus at CLICK time instead of trusting the notify-time context.
  */
-let focusedOverlayAppId: number | null = null;
+/** undefined precedes the first focus event; null marks an invalid event. */
+let focusedOverlayAppId: number | null | undefined;
 
 export function trackOverlayFocus(): void {
-	focusedOverlayAppId = null;
+	focusedOverlayAppId = undefined;
 	try {
 		const sc: any = Reflect.get(globalThis, 'SteamClient');
-		sc?.System?.UI?.RegisterForOverlayGameWindowFocusChanged?.((appid: number) => {
-			const value = Number(appid);
-			focusedOverlayAppId = Number.isSafeInteger(value) && value >= 0 ? value : null;
+		sc?.System?.UI?.RegisterForOverlayGameWindowFocusChanged?.((appid: unknown) => {
+			// Steam app IDs are uint32; coercion could turn a failed signal into desktop.
+			focusedOverlayAppId = typeof appid === 'number' && Number.isInteger(appid) && appid >= 0 && appid <= 0xffffffff
+				? appid : null;
 		});
 	} catch (e) {
 		dlog(`overlay focus tracking failed: ${(e as Error)?.message ?? e}`);
@@ -71,7 +73,8 @@ export async function currentClickSurface(): Promise<{ runningAppId: number | nu
 		const appids = info.map((entry: any) => Number(entry?.appID));
 		if (appids.some((appid) => !Number.isSafeInteger(appid) || appid <= 0)) return null;
 		const focused = focusedOverlayAppId;
-		if (focused !== null && focused > 0) {
+		if (focused === null) return null;
+		if (focused !== undefined && focused > 0) {
 			return appids.includes(focused) ? { runningAppId: focused, focusedAppId: focused } : null;
 		}
 		if (appids.length === 0) return { runningAppId: null, focusedAppId: 0 };

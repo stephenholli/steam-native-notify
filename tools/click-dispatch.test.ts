@@ -21,7 +21,7 @@ const { stashToastHandler, invokeReplayHandler } = await import('../frontend/rep
 const { trackOverlayFocus } = await import('../frontend/overlay');
 const { clientOverlayAction } = await import('../frontend/routes');
 
-let focusChanged: (appid: number) => void;
+let focusChanged: (appid: unknown) => void;
 let sc: any;
 let intervals: Map<number, () => void>;
 let clock: ReturnType<typeof spyOn>;
@@ -39,11 +39,15 @@ function envelope(fallback: string | null = null, captureAppId = 0) {
 	return { v: 1 as const, token: (++nextToken).toString(16).padStart(32, '0'), captureAppId, fallback, focus: 'main' as const };
 }
 
-function capture(value: ReturnType<typeof envelope>, name = 'notificationtoasts_10000_desktop', fn = () => { events.push('replay'); }) {
+function toastWindow(fn = () => { events.push('replay'); }): Window {
 	const doc: any = {};
 	const fiber = { tag: 4, stateNode: { containerInfo: { ownerDocument: doc } }, memoizedProps: { onClick: fn } };
 	doc.querySelectorAll = () => [{ __reactFiber$test: fiber }];
-	expect(stashToastHandler({ document: doc } as Window, name, value.token)).toBe(true);
+	return { document: doc } as Window;
+}
+
+function capture(value: ReturnType<typeof envelope>, name = 'notificationtoasts_10000_desktop', fn = () => { events.push('replay'); }) {
+	expect(stashToastHandler(toastWindow(fn), name, value.token)).toBe(true);
 }
 
 async function flush() {
@@ -79,6 +83,53 @@ beforeEach(() => {
 });
 
 afterEach(() => { clock.mockRestore(); });
+
+for (const name of ['notificationtoasts_uidbogus-10001', 'notificationtoasts_vr', 'notificationtoasts_uid570-bogus']) {
+	test(`an unconfirmed toast surface cannot be stashed or replayed: ${name}`, async () => {
+		const click = envelope();
+		expect(stashToastHandler(toastWindow(), name, click.token)).toBe(false);
+		await dispatchClick(click);
+		expect(invokeReplayHandler(click.token, 0)).toBe(false);
+		expect(events).toEqual([]);
+	});
+}
+
+for (const value of [null, undefined, false, true, '', ' ', 'bogus', '0', '570', -1, 0.5, NaN, Infinity, 4294967296, Number.MAX_SAFE_INTEGER + 1]) {
+	test(`an invalid raw focus callback refuses dispatch: ${String(value)}`, async () => {
+		const click = envelope('steam://openurl/https://steamcommunity.com/example');
+		capture(click);
+		sc.Overlay.GetOverlayBrowserInfo = async () => [{ appID: 570 }, { appID: 1 }];
+		focusChanged(570);
+		focusChanged(value);
+		await dispatchClick(click);
+		expect(events).toEqual([]);
+	});
+}
+
+test('an invalid focus callback stays unknown even with an empty overlay list', async () => {
+	const click = envelope();
+	capture(click);
+	focusChanged(null);
+	await dispatchClick(click);
+	expect(events).toEqual([]);
+});
+
+test('an out-of-range focus callback cannot select an out-of-range overlay', async () => {
+	sc.Overlay.GetOverlayBrowserInfo = async () => [{ appID: 4294967296 }];
+	focusChanged(4294967296);
+	await dispatchClick(envelope('steam://openurl/https://steamcommunity.com/example'));
+	expect(events).toEqual([]);
+});
+
+test('a valid zero focus callback restores desktop after an invalid callback', async () => {
+	const click = envelope();
+	capture(click);
+	sc.Overlay.GetOverlayBrowserInfo = async () => [{ appID: 570 }];
+	focusChanged(null);
+	focusChanged(0);
+	await dispatchClick(click);
+	expect(events).toEqual(['replay', 'focus:main']);
+});
 
 test('a tampered envelope cannot move a desktop callback onto a game', async () => {
 	const click = envelope('steam://openurl/https://steamcommunity.com/example');

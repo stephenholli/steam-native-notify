@@ -86,6 +86,26 @@ if (click) {
 
 	is('desktop toast captures appid 0', click.captureAppIdFromToastName('notificationtoasts_10000_desktop'), 0);
 	is('overlay toast captures its appid', click.captureAppIdFromToastName('notificationtoasts_uid570-10001'), 570);
+	is('another real overlay toast form captures its appid',
+		click.captureAppIdFromToastName('notificationtoasts_uid553850-10002'), 553850);
+	for (const name of [
+		'notificationtoasts_',
+		'notificationtoasts_vr',
+		'notificationtoasts_10000',
+		'notificationtoasts_bogus_desktop',
+		'notificationtoasts_10000_desktop_extra',
+		'notificationtoasts_10000_desktop\n',
+		'notificationtoasts_uidbogus-10001',
+		'notificationtoasts_uid570-',
+		'notificationtoasts_uid570-bogus',
+		'notificationtoasts_uid570-10001_extra',
+		'notificationtoasts_uid570-10001\n',
+		'notificationtoasts_uid0-10001',
+		'notificationtoasts_uid-570-10001',
+		'notificationtoasts_uid4294967296-10001',
+	]) {
+		is(`unconfirmed toast surface is rejected: ${name}`, click.captureAppIdFromToastName(name), null);
+	}
 	is('unknown popup is rejected', click.captureAppIdFromToastName('SP Desktop'), null);
 	is('same desktop surface matches', click.surfaceMatches(0, 0), true);
 	is('desktop and overlay surfaces differ', click.surfaceMatches(0, 570), false);

@@ -93,12 +93,12 @@ export function clickEnvelopeFromSteamUrl(url: string): ClickEnvelope | null {
 }
 
 export function captureAppIdFromToastName(name: string): number | null {
-	const overlay = /^notificationtoasts_uid(\d+)-/.exec(name);
-	if (overlay) {
-		const appid = Number(overlay[1]);
-		return Number.isSafeInteger(appid) && appid > 0 ? appid : null;
-	}
-	return name.startsWith('notificationtoasts_') ? 0 : null;
+	// Steam's toast component formats only these desktop and overlay names.
+	const match = /^notificationtoasts_(?:\d+_desktop|uid(\d+)-\d+)$/.exec(name);
+	if (!match || match[0] !== name) return null;
+	if (match[1] === undefined) return 0;
+	const appid = Number(match[1]);
+	return Number.isInteger(appid) && appid > 0 && appid <= 0xffffffff ? appid : null;
 }
 
 export function surfaceMatches(captureAppId: number, focusedAppId: number): boolean {
