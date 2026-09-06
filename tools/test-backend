@@ -341,7 +341,7 @@ end
 
 -- notify-action's durable Linux activation seam accepts only the versioned
 -- click envelope transport and maps it onto Steam's canonical URL grammar.
-local encoded = "eyJ2IjoxLCJ0IjoiYWJjIiwiYSI6MCwiZiI6bnVsbH0"
+local encoded = "eyJ2IjoxLCJ0b2tlbiI6IjAwMTEyMjMzNDQ1NTY2Nzc4ODk5YWFiYmNjZGRlZWZmIiwiY2FwdHVyZUFwcElkIjowLCJmYWxsYmFjayI6bnVsbCwiZm9jdXMiOiJtYWluIn0"
 local activation_url = "steam://steam-native-notify/notification/" .. encoded
 local function notification_url(route)
 	local handle = io.popen(root .. "/tools/notify-action --notification-url '" .. route .. "'")
@@ -354,6 +354,9 @@ check("notification URL: canonical click envelope",
 check("notification URL: empty payload is refused", notification_url("click:") == nil)
 check("notification URL: malformed payload is refused", notification_url("click:a/b") == nil)
 check("notification URL: non-click route is refused", notification_url("steam://nav/games") == nil)
+check("notification URL: maximum payload is accepted",
+	notification_url("click:" .. string.rep("a", 8192))
+		== "steam://steam-native-notify/notification/" .. string.rep("a", 8192))
 check("notification URL: oversized payload is refused",
 	notification_url("click:" .. string.rep("a", 8193)) == nil)
 
@@ -767,8 +770,9 @@ exit 0
 	steam:write(([[#!/bin/sh
 printf '%%s\n' "$#" > %s/steam-count
 printf '%%s\n' "$@" > %s/steam-args
+printf done > %s/steam-done
 exit 0
-]]):format(click_dir, click_dir))
+]]):format(click_dir, click_dir, click_dir))
 	steam:close()
 	local gdbus = assert(io.open(click_dir .. "/gdbus", "w"))
 	gdbus:write([[#!/bin/sh
@@ -795,12 +799,16 @@ esac
 		os.remove(click_dir .. "/notify-args")
 		os.remove(click_dir .. "/steam-count")
 		os.remove(click_dir .. "/steam-args")
+		os.remove(click_dir .. "/steam-done")
 		os.remove(click_dir .. "/steam-native-notify/.click")
 		local h = io.popen("XDG_CACHE_HOME='" .. click_dir .. "' PATH='" .. click_dir .. "':\"$PATH\" "
 			.. root .. "/tools/notify-action 'T' 'b' '' '" .. route .. "' '" .. (action or "")
-			.. "'; i=0; while [ ! -f '" .. click_dir
-			.. "/steam-args' ] && [ \"$i\" -lt 1000 ]; do i=$((i + 1)); done")
+			.. "'")
 		if h then h:read("*a"); h:close() end
+		local deadline = os.time() + 2
+		while not slurp(click_dir .. "/steam-done") and os.time() < deadline do
+			os.execute("sleep 0.01")
+		end
 		return slurp(click_dir .. "/notify-args"), slurp(click_dir .. "/steam-count"),
 			slurp(click_dir .. "/steam-args"), slurp(click_dir .. "/steam-native-notify/.click")
 	end
@@ -836,6 +844,8 @@ esac
 		{ "empty route", "", "" },
 		{ "empty payload", "click:", "" },
 		{ "malformed payload", "click:a/b", "" },
+		{ "shell metacharacters", "click:abc;$(printf injected)`printf injected`", "" },
+		{ "oversized payload", "click:" .. string.rep("a", 8193), "" },
 		{ "non-click route", "steam://nav/games", "" },
 		{ "action without route", "", "media" },
 	}) do
