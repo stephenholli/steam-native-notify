@@ -690,8 +690,8 @@ else
 end
 
 -- A clicked route is written to the click file stamped with the write time
--- (<epoch-seconds>|<payload>), so the bridge can drop a click that outlived
--- its arm window. notify-send is shimmed to report the click.
+-- (<epoch-seconds>|<payload>), so the bridge can reject an abandoned stale
+-- file. notify-send is shimmed to report the click.
 local click_h = io.popen("mktemp -d")
 local click_dir = click_h:read("*l")
 click_h:close()
@@ -809,7 +809,8 @@ check("windows+ffi: setup is spawned through CreateProcessW",
 		and ffi_commands[1]:find("powershell.exe", 1, true) ~= nil
 		and ffi_commands[1]:find('-File "' .. win_runtime .. '\\notify-action.ps1" -Setup', 1, true) ~= nil,
 	tostring(ffi_commands[1]))
-ok, win_result = pcall(Notify, "Download Complete", "Aircar is ready", "img", "replay:notificationtoasts_9_desktop", "")
+local click_payload = "click:eyJ2IjoxfQ"
+ok, win_result = pcall(Notify, "Download Complete", "Aircar is ready", "img", click_payload, "")
 check("windows+ffi: Notify runs", ok, win_result)
 check("windows+ffi: Notify reports ok", win_result == "ok", tostring(win_result))
 check("windows+ffi: delivery is spawned with an id",
@@ -820,17 +821,29 @@ local payload = payload_name and slurp(tmp_cache .. "/" .. payload_name) or nil
 check("windows+ffi: the payload file carries the five slots",
 	payload ~= nil
 		and payload:find('"title":"Download Complete"', 1, true) ~= nil
-		and payload:find('"route":"replay:notificationtoasts_9_desktop"', 1, true) ~= nil,
-	tostring(payload))
+		and payload:find('"route":"' .. click_payload .. '"', 1, true) ~= nil,
+		tostring(payload))
+
+local focus_result
+ok, focus_result = pcall(FocusSteam, "chat")
+check("windows+ffi: FocusSteam runs", ok, focus_result)
+check("windows+ffi: FocusSteam reports ok", focus_result == "ok", tostring(focus_result))
+check("windows+ffi: chat focus is a one-shot helper invocation",
+	#ffi_commands == 3 and ffi_commands[3]:find('%-FocusKind "chat"$') ~= nil,
+	tostring(ffi_commands[3]))
+local before_invalid_focus = #ffi_commands
+ok, focus_result = pcall(FocusSteam, "other")
+check("windows+ffi: invalid focus is refused", ok and focus_result == "unsupported", tostring(focus_result))
+check("windows+ffi: invalid focus spawns nothing", #ffi_commands == before_invalid_focus, tostring(#ffi_commands))
 package.preload["ffi"] = nil
 
 -- The click and dev-command handoffs join with the platform separator.
 local win_click = assert(io.open(win_runtime .. "\\.click", "w"))
-win_click:write("1756500000|replay:notificationtoasts_3_desktop")
+win_click:write("1756500000|" .. click_payload)
 win_click:close()
 ok, taken = pcall(TakeClick)
 check("windows: TakeClick reads the separator-joined path",
-	ok and taken == "1756500000|replay:notificationtoasts_3_desktop", tostring(taken))
+	ok and taken == "1756500000|" .. click_payload, tostring(taken))
 local win_fire = assert(io.open(win_runtime .. "\\.dev-fire", "w"))
 win_fire:write('{"call":"TestFriendOnline","args":[]}')
 win_fire:close()
@@ -903,11 +916,11 @@ check("macos: dropped notification is logged", mac_dropped)
 
 -- The click and dev-command handoffs live in the same runtime directory.
 local mac_click = assert(io.open(mac_runtime .. "/.click", "w"))
-mac_click:write("1756500000|replay:notificationtoasts_4_desktop")
+mac_click:write("1756500000|" .. click_payload)
 mac_click:close()
 ok, taken = pcall(TakeClick)
 check("macos: TakeClick reads the runtime directory",
-	ok and taken == "1756500000|replay:notificationtoasts_4_desktop", tostring(taken))
+	ok and taken == "1756500000|" .. click_payload, tostring(taken))
 
 -- Identity: steam_path answers the bundle (no config/ there), so the
 -- Application Support data directory is the one that answers.

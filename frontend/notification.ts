@@ -1,30 +1,29 @@
 import { firstFiber } from './fiber';
+import { fieldsForType } from './generated/notifications';
+import type { PbValue, ServerNotification } from './routes';
 
 /**
  * "React tree -> typed notification", in one place.
  *
  * Steam attaches its own decoded notification object to the toast's React
- * tree: `{ eType, eSource, data, ... }`. Client-sourced (eSource 1), `data`
- * is a Closure protobuf whose values sit POSITIONALLY in `array`;
- * server-sourced (2), a plain rollup whose `item.body_data` is JSON
- * (docs/steam-routing.md). The decode feeds ONLY the from-toast log line,
- * so the client payload passes through as the raw array -- the schema that
- * named its fields left with the catalog (docs/regeneration.md §2;
- * docs/notification-types.md maps the type numbers).
+ * tree: `{ eType, eSource, data, ... }`. Client-sourced data is a Closure
+ * protobuf whose positional array is decoded with the generated schema;
+ * server-sourced data is a rollup whose `item.body_data` is JSON.
  */
 export type DecodedNotification =
-	| { source: 'client'; type: number; raw: unknown[] }
+	| { source: 'client'; type: number; fields: Record<string, PbValue> }
 	| { source: 'server'; type: number; server: ServerNotification };
-
-/** The server (eSource=2) rollup, as the toast components receive it. */
-export interface ServerNotification {
-	type: number;
-	body: Record<string, unknown> | null;
-	url?: string;
-}
 
 /** eSource on Steam's notification object: which of the two systems produced it. */
 const SOURCE_SERVER = 2;
+
+let foundBrowserInfo: unknown = null;
+
+export function takeToastBrowserInfo(): unknown {
+	const value = foundBrowserInfo;
+	foundBrowserInfo = null;
+	return value;
+}
 
 /**
  * The notification Steam attached to the toast, read out of the React tree.
@@ -46,6 +45,18 @@ export function notificationFromToast(win: Window): DecodedNotification | null {
 		if (!fiber) return null;
 		for (let depth = 0; fiber && depth < 30; depth++) {
 			const props = fiber.memoizedProps ?? fiber.pendingProps;
+			if (!foundBrowserInfo) {
+				try {
+					const browserInfo =
+						props?.browserInfo ??
+						props?.params?.browserInfo ??
+						props?.value?.params?.browserInfo ??
+						props?.value?.browserInfo;
+					if (browserInfo && typeof browserInfo === 'object') foundBrowserInfo = browserInfo;
+				} catch {
+					/* hostile context getter; keep walking */
+				}
+			}
 			const notification = props?.notification;
 			if (!decoded && notification && typeof notification === 'object') {
 				const type = Number((notification as any).eType);
@@ -70,11 +81,19 @@ export function notificationFromToast(win: Window): DecodedNotification | null {
 						},
 					};
 				} else {
+					const fields: Record<string, PbValue> = {};
+					const schema = fieldsForType(type);
 					const array = data?.array;
-					decoded = { source: 'client', type, raw: Array.isArray(array) ? array : [] };
+					const offset = typeof data?.arrayIndexOffset_ === 'number' ? data.arrayIndexOffset_ : -1;
+					if (schema && Array.isArray(array)) {
+						for (const [num, field] of Object.entries(schema)) {
+							const value = array[Number(num) + offset];
+							if (value !== undefined && value !== null) fields[field.name] = value as PbValue;
+						}
+					}
+					decoded = { source: 'client', type, fields };
 				}
 			}
-			if (decoded) break;
 			fiber = fiber.return;
 		}
 		return decoded;

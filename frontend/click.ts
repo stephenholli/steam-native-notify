@@ -1,0 +1,114 @@
+export const CLICK_PAYLOAD_PREFIX = 'click:';
+
+export type FocusKind = 'chat' | 'main';
+
+export interface ClickEnvelope {
+	v: 1;
+	token: string;
+	/** 0 is the desktop surface; a positive value is the overlay appid. */
+	captureAppId: number;
+	/** A catalog route or action token; null means exact replay only. */
+	fallback: string | null;
+	focus: FocusKind;
+}
+
+const TOKEN = /^[a-f0-9]{32}$/;
+const ENCODED = /^[A-Za-z0-9_-]+$/;
+const ACTION = /^action:(?:media|requestplaytime|screenshot:[A-Za-z0-9_.-]+|clip:[A-Za-z0-9_.-]+|chatroom:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+)$/;
+
+function validFallback(value: unknown): value is string | null {
+	if (value === null) return true;
+	if (typeof value !== 'string' || value.length === 0 || value.length > 4096) return false;
+	if (ACTION.test(value)) return true;
+	return /^steam:\/\/[A-Za-z0-9][^\u0000-\u0020]{0,4095}$/.test(value);
+}
+
+function validEnvelope(value: unknown): value is ClickEnvelope {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+	const item = value as Record<string, unknown>;
+	return (
+		item.v === 1 &&
+		typeof item.token === 'string' &&
+		TOKEN.test(item.token) &&
+		typeof item.captureAppId === 'number' &&
+		Number.isSafeInteger(item.captureAppId) &&
+		item.captureAppId >= 0 &&
+		validFallback(item.fallback) &&
+		(item.focus === 'chat' || item.focus === 'main')
+	);
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+	let binary = '';
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+	const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (value.length % 4)) % 4);
+	const binary = atob(padded);
+	return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+export function newClickToken(): string {
+	const bytes = new Uint8Array(16);
+	crypto.getRandomValues(bytes);
+	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export function encodeClickEnvelope(value: unknown): string {
+	const bytes = new TextEncoder().encode(JSON.stringify(value));
+	return bytesToBase64(bytes).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+export function decodeClickEnvelope(encoded: string): ClickEnvelope | null {
+	try {
+		if (typeof encoded !== 'string' || encoded.length === 0 || encoded.length > 8192 || !ENCODED.test(encoded)) {
+			return null;
+		}
+		const parsed: unknown = JSON.parse(new TextDecoder().decode(base64ToBytes(encoded)));
+		return validEnvelope(parsed) ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+
+export function decodeClickPayload(payload: string): ClickEnvelope | null {
+	if (typeof payload !== 'string' || !payload.startsWith(CLICK_PAYLOAD_PREFIX)) return null;
+	return decodeClickEnvelope(payload.slice(CLICK_PAYLOAD_PREFIX.length));
+}
+
+export function clickEnvelopeFromSteamUrl(url: string): ClickEnvelope | null {
+	const match = /^steam:\/{1,2}snn\/click\/([A-Za-z0-9_-]+)\/?$/.exec(String(url).trim());
+	return match ? decodeClickEnvelope(match[1]) : null;
+}
+
+export function captureAppIdFromToastName(name: string): number | null {
+	const overlay = /^notificationtoasts_uid(\d+)-/.exec(name);
+	if (overlay) {
+		const appid = Number(overlay[1]);
+		return Number.isSafeInteger(appid) && appid > 0 ? appid : null;
+	}
+	return name.startsWith('notificationtoasts_') ? 0 : null;
+}
+
+export function surfaceMatches(captureAppId: number, focusedAppId: number): boolean {
+	return captureAppId === focusedAppId;
+}
+
+export type DeliveryMode = 'replay' | 'fallback' | 'none';
+
+export function deliveryMode(
+	envelope: ClickEnvelope,
+	focusedAppId: number,
+	replayAvailable: boolean,
+): DeliveryMode {
+	if (replayAvailable && surfaceMatches(envelope.captureAppId, focusedAppId)) return 'replay';
+	return envelope.fallback ? 'fallback' : 'none';
+}
+
+export function focusKindFor(type: number | undefined, fallback: string | null): FocusKind {
+	if ([3, 4, 8, 9, 17].includes(type ?? -1)) return 'chat';
+	if (fallback?.startsWith('steam://friends/message/') || fallback?.startsWith('action:chatroom:')) return 'chat';
+	return 'main';
+}

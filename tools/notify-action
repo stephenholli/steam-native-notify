@@ -313,10 +313,9 @@ done
 # this notification, so neither does this. Dismissing is the whole behaviour.
 [ -n "$route" ] || [ -n "$ingame_action" ] || exit 0
 
-# The write is stamped (<epoch-seconds>|<payload>): the bridge only polls for
-# 120s after a delivery, so a click landing after it disarms would sit in the
-# file and fire as a surprise on the NEXT arm, up to days later. The bridge
-# drops anything older than 30 seconds.
+# The write is stamped (<epoch-seconds>|<payload>): the session-long bridge
+# drops anything older than 30 seconds, so an abandoned file cannot fire as a
+# surprise after Steam or the frontend resumes.
 case $(click_plan "$route" "$ingame_action") in
 overlay)
 	# Written to a temp name and renamed: several instances block on their

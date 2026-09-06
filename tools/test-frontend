@@ -1,14 +1,7 @@
 #!/usr/bin/env node
-// Exercise the frontend's toast decode without Steam.
-//
-// On this branch clicks are replayed from stashed handlers (frontend/replay.ts),
-// so there is no routing subgraph to lock down: the walk and the invoke touch
-// live React fibers and Steam stores that only exist in the running client
-// (verify them with tools/fire --replay against a live Steam). What remains
-// offline-testable is notificationFromToast, which feeds the from-toast log
-// line that every diagnosis in this repo reads.
+// Exercise the Millennium-free click, decode, and chooser subgraph.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,6 +30,16 @@ function is(what, got, want) {
 // non-Millennium host (docs/architecture.md). Indirect imports like './log'
 // are fine; only a direct 'millennium' import breaks the boundary.
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+for (const path of [
+	'frontend/routes.ts',
+	'frontend/urlstore.ts',
+	'frontend/identity.ts',
+	'frontend/overlay.ts',
+	'frontend/generated/notifications.ts',
+	'vendor/steammessages_clientnotificationtypes.proto',
+]) {
+	check(`${path} is present for durable fallback routing`, existsSync(join(root, path)));
+}
 for (const name of ['choose', 'fiber', 'notification', 'replay']) {
 	const source = readFileSync(join(root, 'frontend', `${name}.ts`), 'utf8');
 	check(`frontend/${name}.ts stays free of direct millennium imports`,
@@ -44,34 +47,77 @@ for (const name of ['choose', 'fiber', 'notification', 'replay']) {
 		`frontend/${name}.ts imports 'millennium'; the offline-test boundary forbids that`);
 }
 
-// --- steam:// click URL ----------------------------------------------------
+const replaySource = readFileSync(join(root, 'frontend', 'replay.ts'), 'utf8');
+check('replay handlers have no time-based expiry', !replaySource.includes('CLICK_WINDOW_MS'));
+check('replay handlers retain at most 256 delivered clicks', /STASH_MAX\s*=\s*256/.test(replaySource));
+check('replay diagnostic metadata is bounded per click',
+	/candidates:\s*candidates\.slice\(0,\s*LOG_CANDIDATES_MAX\)\.map\(toMeta\)/.test(replaySource));
 
-// The Windows click transport: Steam dispatches steam://snn/replay/<toast> to
-// the client's JS (frontend/steamurl.ts). The parser is the trust boundary --
-// Steam passes the URL through verbatim, so only the one shape this plugin
-// emits may reach the replay stash. Parsed here by the same regex the module
-// uses; keep them in step.
-const REPLAY_URL = /^steam:\/{1,2}snn\/replay\/([A-Za-z0-9_.-]+)\/?$/;
-const replayName = (url) => {
-	const m = REPLAY_URL.exec(String(url).trim());
-	return m ? m[1] : null;
-};
-check('steam-url: a replay URL yields the toast name',
-	replayName('steam://snn/replay/notificationtoasts_10001_desktop') === 'notificationtoasts_10001_desktop');
-check('steam-url: a single-slash URL is accepted (Steam normalizes both)',
-	replayName('steam:/snn/replay/notificationtoasts_2_desktop') === 'notificationtoasts_2_desktop');
-check('steam-url: a trailing slash is tolerated',
-	replayName('steam://snn/replay/toast_1/') === 'toast_1');
-for (const bad of [
-	'steam://snn/replay/',
-	'steam://snn/other/toast_1',
-	'steam://millennium/settings',
-	'steam://snn/replay/../../etc/passwd',
-	'steam://snn/replay/toast 1',
-	'snn:replay/toast_1',
-	'',
-]) {
-	check(`steam-url: refuses ${JSON.stringify(bad)}`, replayName(bad) === null);
+// --- durable click envelope ------------------------------------------------
+
+let click = null;
+try {
+	click = loadFrontendModules(['click']).click;
+	check('durable click module loads', true);
+} catch (error) {
+	check('durable click module loads', false, String(error));
+}
+
+if (click) {
+	const token = '00112233445566778899aabbccddeeff';
+	const envelope = {
+		v: 1,
+		token,
+		captureAppId: 0,
+		fallback: 'steam://friends/message/76561198000000000',
+		focus: 'chat',
+	};
+	const encoded = click.encodeClickEnvelope(envelope);
+	is('click envelope round trips', JSON.stringify(click.decodeClickEnvelope(encoded)), JSON.stringify(envelope));
+	is('click-file payload round trips', JSON.stringify(click.decodeClickPayload(`click:${encoded}`)), JSON.stringify(envelope));
+	is('Windows steam URL round trips',
+		JSON.stringify(click.clickEnvelopeFromSteamUrl(`steam://snn/click/${encoded}`)), JSON.stringify(envelope));
+	is('single-slash Windows URL round trips',
+		JSON.stringify(click.clickEnvelopeFromSteamUrl(`steam:/snn/click/${encoded}/`)), JSON.stringify(envelope));
+
+	is('desktop toast captures appid 0', click.captureAppIdFromToastName('notificationtoasts_10000_desktop'), 0);
+	is('overlay toast captures its appid', click.captureAppIdFromToastName('notificationtoasts_uid570-10001'), 570);
+	is('unknown popup is rejected', click.captureAppIdFromToastName('SP Desktop'), null);
+	is('same desktop surface matches', click.surfaceMatches(0, 0), true);
+	is('desktop and overlay surfaces differ', click.surfaceMatches(0, 570), false);
+	is('same overlay app matches', click.surfaceMatches(570, 570), true);
+	is('different overlay apps differ', click.surfaceMatches(570, 730), false);
+	is('matching live handler prefers replay', click.deliveryMode?.(envelope, 0, true), 'replay');
+	is('surface change chooses the fallback', click.deliveryMode?.(envelope, 570, true), 'fallback');
+	is('missing post-restart handler chooses the fallback', click.deliveryMode?.(envelope, 0, false), 'fallback');
+	is('no handler and no fallback does nothing',
+		click.deliveryMode?.({ ...envelope, fallback: null }, 0, false), 'none');
+	is('a mismatched handler without fallback does nothing',
+		click.deliveryMode?.({ ...envelope, fallback: null }, 570, true), 'none');
+
+	is('friend messages focus chat', click.focusKindFor(8, envelope.fallback), 'chat');
+	is('friend routes focus chat', click.focusKindFor(999, envelope.fallback), 'chat');
+	is('group-chat actions focus chat', click.focusKindFor(9, 'action:chatroom:7:8'), 'chat');
+	is('achievements focus the main window', click.focusKindFor(5, 'steam://openurl/https://steamcommunity.com/x'), 'main');
+
+	const tokenA = click.newClickToken();
+	const tokenB = click.newClickToken();
+	check('random click token is 128-bit hex', /^[a-f0-9]{32}$/.test(tokenA), tokenA);
+	check('random click tokens do not reuse popup identity', tokenA !== tokenB);
+
+	for (const bad of [
+		'',
+		'not-base64',
+		click.encodeClickEnvelope({ ...envelope, v: 2 }),
+		click.encodeClickEnvelope({ ...envelope, token: 'notificationtoasts_10000_desktop' }),
+		click.encodeClickEnvelope({ ...envelope, captureAppId: -1 }),
+		click.encodeClickEnvelope({ ...envelope, fallback: 'file:///etc/passwd' }),
+		click.encodeClickEnvelope({ ...envelope, focus: 'other' }),
+	]) {
+		is(`malformed click envelope is refused: ${JSON.stringify(bad).slice(0, 50)}`, click.decodeClickEnvelope(bad), null);
+	}
+	is('old toast-name replay URL is refused',
+		click.clickEnvelopeFromSteamUrl('steam://snn/replay/notificationtoasts_10000_desktop'), null);
 }
 
 // --- notificationFromToast -------------------------------------------------
@@ -97,7 +143,7 @@ const client = notification.notificationFromToast(
 check('client toast decodes', client !== null && client.source === 'client', JSON.stringify(client));
 if (client?.source === 'client') {
 	is('client toast carries the type', client.type, 1);
-	is('client toast passes the raw array through', JSON.stringify(client.raw), JSON.stringify(clientArray));
+	is('client toast decodes appid by field number', client.fields.appid, 570);
 }
 
 const srv = notification.notificationFromToast(
@@ -123,7 +169,7 @@ const deep = notification.notificationFromToast(
 	toastWindow(fiberChain({ eType: 1, eSource: 1, data: { array: clientArray } }, 2)),
 );
 check('notification found up the fiber.return chain',
-	deep?.source === 'client' && deep.raw[0] === 570, JSON.stringify(deep));
+	deep?.source === 'client' && deep.fields.appid === 570, JSON.stringify(deep));
 
 is('a window with no fiber yields null', notification.notificationFromToast(toastWindow(null)), null);
 

@@ -19,18 +19,8 @@ import { firstFiber } from './fiber';
  * only costs that toast its click.
  */
 
-/** The click-file payload prefix: `replay:<toast-name>`. */
-export const REPLAY_CLICK_PREFIX = 'replay:';
-
-/**
- * How long a delivered notification stays clickable. The click bridge polls
- * for exactly this long after each delivery, and the stash keeps handlers
- * exactly as long -- one constant, so a click the bridge would still
- * consume always finds its handler. The stash is also bounded to the
- * latest STASH_MAX toasts: a stashed closure pins its captured scope.
- */
-export const CLICK_WINDOW_MS = 120_000;
-const STASH_MAX = 8;
+/** Heap measurements put current handlers below 0.5KB each after forced GC. */
+const STASH_MAX = 256;
 
 const SNIPPET_LEN = 200;
 const MAX_FIBERS = 5000;
@@ -39,17 +29,19 @@ const LOG_CANDIDATES_MAX = 12;
 
 /**
  * Candidate metadata without the function: what the stash retains for
- * --replay inspect. Only the CHOSEN handler's closure is worth pinning for
- * CLICK_WINDOW_MS; a portal miss once collected 673 candidates.
+ * --replay inspect. Only the CHOSEN handler's closure is retained; a portal
+ * miss once collected 673 candidates, so all other entries are metadata.
  */
 type CandidateMeta = Omit<Candidate, 'fn'>;
 
 interface StashEntry {
+	token: string;
 	name: string;
 	stashedAt: number;
 	/** The proven handler, or null for an ambiguous toast kept for inspect. */
 	fn: ((e: unknown) => unknown) | null;
 	chosen: CandidateMeta | null;
+	candidateCount: number;
 	candidates: CandidateMeta[];
 }
 
@@ -60,10 +52,6 @@ function toMeta({ fn: _fn, ...meta }: Candidate): CandidateMeta {
 }
 
 function pruneStash(): void {
-	const cutoff = Date.now() - CLICK_WINDOW_MS;
-	for (const [key, entry] of stash) {
-		if (entry.stashedAt < cutoff) stash.delete(key);
-	}
 	while (stash.size > STASH_MAX) {
 		const oldest = stash.keys().next().value;
 		if (oldest === undefined) break;
@@ -152,14 +140,14 @@ function collectCandidates(rootFiber: any): Candidate[] {
  * stashed without a handler so --replay inspect can still show what the
  * walk saw.
  */
-export function stashToastHandler(win: Window, name: string): string | null {
+export function stashToastHandler(win: Window, name: string, token: string): boolean {
 	try {
 		const doc = win.document;
-		if (!doc) return null;
+		if (!doc) return false;
 		const fiber = firstFiber(doc);
 		if (!fiber) {
 			dlog(`replay: candidates ${name} n=0 (no fiber key in toast document)`);
-			return null;
+			return false;
 		}
 
 		const { root, viaPortal } = toastSubtreeRoot(fiber, doc);
@@ -182,19 +170,23 @@ export function stashToastHandler(win: Window, name: string): string | null {
 			}
 		}
 
-		stash.delete(name); // re-insert so the map stays insertion-ordered by recency
-		stash.set(name, {
+		stash.delete(token);
+		stash.set(token, {
+			token,
 			name,
 			stashedAt: Date.now(),
 			fn: picked?.chosen.fn ?? null,
 			chosen: picked ? toMeta(picked.chosen) : null,
-			candidates: candidates.map(toMeta),
+			candidateCount: candidates.length,
+			// A portal miss can see hundreds of unrelated handlers. The health
+			// line keeps the total; inspect retains only bounded diagnostics.
+			candidates: candidates.slice(0, LOG_CANDIDATES_MAX).map(toMeta),
 		});
 		pruneStash();
-		return picked ? `${REPLAY_CLICK_PREFIX}${name}` : null;
+		return picked !== null;
 	} catch (e) {
 		dlog(`replay: walk failed for ${name}: ${(e as Error)?.message ?? e}`);
-		return null;
+		return false;
 	}
 }
 
@@ -204,7 +196,7 @@ export function inspectReplayStash(): void {
 	for (const entry of stash.values()) {
 		const age = Math.round((Date.now() - entry.stashedAt) / 1000);
 		const chosen = entry.chosen ? `${entry.chosen.prop}@${entry.chosen.depth}` : 'none';
-		dlog(`replay: stash ${entry.name} age=${age}s n=${entry.candidates.length} chosen=${chosen}`);
+		dlog(`replay: stash ${entry.name} token=${entry.token.slice(0, 8)} age=${age}s n=${entry.candidateCount} chosen=${chosen}`);
 		entry.candidates.forEach((c, i) => {
 			dlog(`replay: stash ${entry.name} #${i} ${c.prop}@${c.depth} name=${c.fnName || '(anon)'} :: ${c.snippet}`);
 		});
@@ -212,58 +204,27 @@ export function inspectReplayStash(): void {
 }
 
 /**
- * Invoke a stashed handler with a stub event. No name targets the most
- * recent entry (the tools/fire probe rides the same poll as the fires).
- * A throw from the handler is logged verbatim and swallowed. Returns
- * whether a live handler was found and ran without throwing.
+ * Invoke a stashed handler with a stub event. No identifier targets the most
+ * recent entry for the tools/fire probe. A throw is logged and swallowed.
+ * Returns whether a live handler was found and ran without throwing.
  */
-/**
- * Open Steam's desktop window if it is closed to the tray, so a replayed
- * click has somewhere to land.
- *
- * This deliberately does NOT try to raise a window that already exists.
- * Windows grants foreground rights to the process the shell activates, and
- * they cannot be taken by anyone else (Raymond Chen, 2009: foreground
- * permission "has to be given to you"). A toast click activates steam.exe,
- * which forwards the URL to the resident client over IPC and exits, so the
- * grant dies with it; nothing callable from inside Steam can recover it.
- * Measured on Windows 11 (docs/platforms.md): BringToFront(AndForceOS),
- * MarkLastFocused, SetKeyFocus, ShowWindow and a HideWindow+ShowWindow
- * re-present all ran from the main window's own context and none took the
- * foreground -- and Steam's own steam://open/friends behaves the same way.
- *
- * steam://open/ is the family Valve documents as opening a window (nav/
- * explicitly does not activate), so it is what creates one when there is
- * none. Best-effort: a click must still replay if this fails.
- */
-export function raiseSteamWindow(): void {
-	try {
-		const sc = Reflect.get(globalThis, 'SteamClient') as
-			| { URL?: { ExecuteSteamURL?: (url: string) => void } }
-			| undefined;
-		sc?.URL?.ExecuteSteamURL?.('steam://open/main');
-	} catch (e) {
-		dlog(`raise failed: ${(e as Error)?.message ?? e}`);
-	}
-}
-
-export function invokeReplayHandler(name?: string): boolean {
+export function invokeReplayHandler(identifier?: string): boolean {
 	let entry: StashEntry | undefined;
-	if (name) {
-		entry = stash.get(name);
+	if (identifier) {
+		entry = stash.get(identifier);
+		if (!entry) {
+			for (const candidate of stash.values()) {
+				if (candidate.name === identifier) entry = candidate;
+			}
+		}
 	} else {
 		for (const e of stash.values()) entry = e; // last = most recent
 	}
 	if (!entry) {
-		dlog(`replay: invoke ${name ?? '(latest)'} -> no stash entry`);
+		dlog(`replay: invoke ${identifier ?? '(latest)'} -> no stash entry`);
 		return false;
 	}
 	const age = Math.round((Date.now() - entry.stashedAt) / 1000);
-	if (Date.now() - entry.stashedAt > CLICK_WINDOW_MS) {
-		dlog(`replay: invoke ${entry.name} -> expired (${age}s old)`);
-		stash.delete(entry.name);
-		return false;
-	}
 	if (!entry.fn || !entry.chosen) {
 		dlog(`replay: invoke ${entry.name} -> entry has no handler`);
 		return false;

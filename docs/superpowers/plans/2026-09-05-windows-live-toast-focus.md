@@ -1,13 +1,21 @@
 # Windows Live Toast Focus Implementation Plan
 
+> Superseded by `2026-09-05-durable-click-routing.md`: focus now runs as a
+> route-aware one-shot helper after protocol dispatch, including history clicks.
+
+> Outcome correction: repeated automated clicks disproved the original
+> `AppActivate` focus observation. The implementation now uses a reversible
+> z-order pulse for visibility; `docs/platforms.md` records the measured limit.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
-**Goal:** Foreground Steam when a routed Windows toast is clicked from its live banner.
+**Goal:** Raise Steam above ordinary windows when a routed Windows toast is
+clicked from its live banner.
 
 **Architecture:** Keep steam:// as the routing transport. Hold routed toast
 objects in the existing hidden PowerShell sender and attach an in-memory .NET
 event sink that calls WScript.Shell.AppActivate for Steam's visible
-steamwebhelper process.
+steamwebhelper process, then briefly pulses its z-order to topmost and back.
 
 **Tech Stack:** Windows PowerShell 5.1, WinRT toast APIs, in-memory C#, WSH
 WScript.Shell, existing Lua and TypeScript bridge
@@ -18,9 +26,9 @@ WScript.Shell, existing Lua and TypeScript bridge
 
 - Keep steam://snn/replay/<toast> as the only Windows click route
 - Do not register a COM activator or ship a binary
-- Treat focus as best-effort; delivery and routing must survive every failure
+- Treat the z-order raise as best-effort; delivery and routing must survive every failure
 - Limit the sender lifetime to activation, dismissal, failure, or 120 seconds
-- Leave Notification Center foregrounding out of scope
+- Leave Notification Center window raising out of scope
 - Do not change non-Windows behavior
 
 ---
@@ -132,8 +140,8 @@ Run the same Windows command. Expected: PASS routed helper remained alive.
 - [ ] **Step 1: Update lifecycle comments and platform documentation**
 
 Document that routed Windows helpers remain alive for the live activation
-window, live banners foreground Steam, and Notification Center clicks remain
-navigation-only.
+window, live banners raise Steam above ordinary windows, and Notification
+Center clicks remain navigation-only.
 
 - [ ] **Step 2: Re-run the offline validation gate**
 
@@ -150,7 +158,7 @@ helper matches the build.
 
 Fire TestAchievement 570, click the live native banner, and confirm:
 
-- Steam reaches the foreground
+- Steam rises above an ordinary foreground window
 - steam-url: replay:<toast> appears
 - replay: invoke <toast> returns without throwing
 

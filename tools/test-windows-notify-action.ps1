@@ -6,7 +6,25 @@ $process = $null
 
 try {
     New-Item -ItemType Directory -Path $testRoot | Out-Null
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'notify-action.ps1') -Destination $helper
+    $sourceHelper = Join-Path $PSScriptRoot 'notify-action.ps1'
+    $helperSource = Get-Content -LiteralPath $sourceHelper -Raw
+    if ($helperSource -notmatch '(?s)SetWindowPos\(target, HWND_TOPMOST.*SetWindowPos\(target, HWND_NOTOPMOST') {
+        throw 'FAIL one-shot focus does not restore a reversible z-order raise'
+    }
+    Write-Output 'PASS one-shot focus restores its z-order raise'
+    if ($helperSource -match 'add_Activated|Wait\(120000\)') {
+        throw 'FAIL notification delivery still retains an activation callback'
+    }
+    Write-Output 'PASS notification delivery retains no activation callback'
+    if ($helperSource -notmatch '\[string\]\$FocusKind') {
+        throw 'FAIL helper has no route-aware focus mode'
+    }
+    Write-Output 'PASS helper has route-aware focus mode'
+    if ($helperSource -notmatch 'steam://snn/click/\$\(\$Matches\[1\]\)') {
+        throw 'FAIL helper does not persist the durable click envelope in the activation URI'
+    }
+    Write-Output 'PASS helper persists the durable click envelope in the activation URI'
+    Copy-Item -LiteralPath $sourceHelper -Destination $helper
 
     $steamDir = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Valve\Steam').SteamPath
     Set-Content -LiteralPath (Join-Path $testRoot 'steam-dir') -Value $steamDir -Encoding utf8
@@ -16,7 +34,7 @@ try {
         title = 'Steam Native Notify lifetime test'
         body = 'This notification may be ignored.'
         image = ''
-        route = 'replay:lifetime-test'
+        route = 'click:eyJ2IjoxfQ'
         ingame = ''
     } | ConvertTo-Json -Compress |
         Set-Content -LiteralPath (Join-Path $testRoot "$id.notify") -Encoding utf8
@@ -27,15 +45,10 @@ try {
         '-File', $helper,
         '-Id', $id
     )
-    Start-Sleep -Milliseconds 750
-    $process.Refresh()
-    if ($process.HasExited) {
-        throw 'FAIL routed helper exited before its activation window'
+    if (-not $process.WaitForExit(10000)) {
+        throw 'FAIL routed delivery retained an activation process'
     }
-
-    Write-Output 'PASS routed helper remained alive'
-    Stop-Process -Id $process.Id -Force
-    $process.WaitForExit()
+    Write-Output 'PASS routed delivery exited after Show'
     $process = $null
 
     $id = 'unrouted-lifetime'

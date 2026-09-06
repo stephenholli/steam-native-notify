@@ -226,16 +226,15 @@ local notify_seq = 0
 --- starts on each OS; Notify above it is OS-blind.
 ---
 --- POSIX: `sh <helper> ... >/dev/null 2>&1 &`. Backgrounded because the
---- helper blocks for the popup's lifetime, and this backend's single event
---- loop must keep answering the frontend's polls meanwhile.
+--- helper can block for the notification daemon's action lifetime, and this
+--- backend's single event loop must keep answering the frontend's polls.
 ---
 --- Windows (EXPERIMENTAL; docs/platforms.md lists the hardware checks): the
 --- five slots travel as a <id>.notify JSON file --
 --- a file, not a command line, so quoting stays out of the contract -- and
---- notify-action.ps1 is started through CreateProcessW above. The helper
---- waits for a routed live banner's activation, dismissal, or timeout so it
---- can foreground Steam. Navigation comes back independently through Steam's
---- own steam:// URL handling, including later Notification Center clicks.
+--- notify-action.ps1 is started through CreateProcessW above and exits after
+--- Show(). A click returns through Steam's own steam:// URL handling; only
+--- then does the frontend request a short, route-aware focus helper.
 ---
 --- macOS: not implemented. sh is there but notify-send and gdbus are not;
 --- the helper would fail on its own, and does so loudly, but nothing is
@@ -319,6 +318,23 @@ function Notify(title, body, image, route, ingame)
     -- and tools/test-backend. A missing helper was already reported loudly at
     -- load; delivering without it would mean a second, untested notify-send.
     if not spawn_helper(title, body, raw_image, route, ingame) then
+        return "unsupported"
+    end
+    return "ok"
+end
+
+--- Run the bounded Windows foreground pulse after a click has dispatched.
+--- Delivery never waits for activation: one helper exists only while it is
+--- finding and raising the requested Steam window.
+---@ffi
+---@param kind any
+---@return string
+function FocusSteam(kind)
+    kind = tostring(kind or "")
+    if not IS_WINDOWS or (kind ~= "chat" and kind ~= "main") then
+        return "unsupported"
+    end
+    if not spawn_windows_helper('-FocusKind "' .. kind .. '"') then
         return "unsupported"
     end
     return "ok"

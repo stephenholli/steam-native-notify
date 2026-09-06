@@ -8,29 +8,27 @@ desktop notification daemon, preserving the artwork and the click action.
 vocabulary, verified facts, testing methodology, and dead ends. Read it
 before non-trivial work. `docs/steam-routing.md` is the analysis of Steam's
 own click handling; `docs/notification-types.md` maps type numbers to names;
-`docs/regeneration.md` restores the removed subsystems if ever needed;
+`docs/regeneration.md` records the catalog/schema restoration procedure;
 `docs/platforms.md` is the platform support matrix (Linux native shipped;
-Flatpak paths ready, host unsupported; Windows delivery shipped but
-EXPERIMENTAL and unvalidated on real hardware; macOS refuses to deliver,
+Flatpak paths ready, host unsupported; Windows delivery shipped and validated
+on one Windows 11 VM but EXPERIMENTAL; macOS refuses to deliver,
 loudly) and the delivery plan for each.
 
 ## State
 
-**Clicks are handler replay.** At capture time frontend/replay.ts walks the
-toast's fiber tree and stashes the click handler Steam attached to it,
-proven by choose.ts (identity twin or sole handler; ambiguity refuses and
-the toast stays unclickable — never a wrong action). A click writes
-`replay:<toast-name>` to `~/.cache/steam-native-notify/.click` and the
-bridge invokes the stash. Known limit, measured in
-docs/experiments/click-replay.md: the handler is frozen to the surface the
-toast rendered on — captured in-game and clicked after the game exits, it
-silently no-ops. The stash holds the latest 8 toasts for 120s; clicks past
-that (or after a Steam restart) do nothing.
+**Clicks are exact replay plus a durable route.** At capture time
+frontend/replay.ts stashes Steam's proved click handler under a random token;
+the restored schema/catalog derives a verified fallback. The versioned click
+envelope carries token, capture appid, fallback, and Windows focus target. On
+a matching live surface the bridge replays Steam's handler. On a focus change,
+missing stash, replay throw, or Steam restart it dispatches the fallback against
+current focus. Ambiguity and uncataloged types fail closed.
 
-The previous implementation — a hand-built routing catalog with live-focus
-surface selection, plus the generated protobuf schema — is preserved whole
-on branch `backup/routing-catalog`; `docs/regeneration.md` records what
-each piece was, why it left, and how to bring it back.
+The replay stash retains the latest 256 chosen closures for the Steam session,
+with no time expiry. Heap measurements found current handlers under 0.5KB each
+and no detached documents. Durable data is stored in the OS notification's
+activation URI, not in the heap or on plugin disk. Windows history clicks can
+therefore route after a Steam restart; exact replay cannot.
 
 ## Commands
 
@@ -122,11 +120,10 @@ meaningless, and produced three wrong conclusions in this project.
 **Watch the client while clicking.** A `steam://nav/...` route changes a page
 inside the existing window; unwatched, a working navigation looks like nothing.
 
-**Clicks ride the click bridge, which has windows.** The bridge polls for 120s
-after each delivery and drops clicks older than 30s; a click outside those
-windows (or after Steam quits) does nothing, by design. Every consumed click
-logs a `click-bridge:` line — no line means the bridge was not armed or the
-poll ended.
+**Clicks ride the session-long click bridge.** It drops click-file writes older
+than 30s; that is stale-file protection, not notification expiry. Every
+consumed click logs a `click-bridge:` line. No line means the OS action did not
+reach Steam or the frontend is not running.
 
 **Never fire TestIncomingVoiceChat.** A fake incoming call has no caller to
 hang up: its notification never resolves, and once its toast has shown,
@@ -160,10 +157,10 @@ When adding a route, cite the observation or Steam code path behind it.
 notification to the toast's React tree. The feed misses types entirely: an
 incoming voice chat produces no feed event at all.
 
-**Nothing routes on the decode anymore.** Client payloads are logged as the
-raw positional `data.array` (the schema that named its fields left with the
-catalog; docs/regeneration.md brings it back). Type numbers map to names via
-docs/notification-types.md.
+**Durable routing depends on the generated decode.** Client payload fields are
+decoded from their positional `data.array` using the vendored protobuf schema.
+The named fields feed `routes.ts`; an unknown/malformed payload gets exact
+replay only and otherwise fails closed. Regenerate through `bun run build`.
 
 **Edit files directly, and verify the edit landed.** Positional splices and loose
 regexes silently dropped edits and deleted a live declaration twice.
@@ -174,18 +171,20 @@ regexes silently dropped edits and deleted a live declaration twice.
 millennium.toml           plugin manifest; starlight packs everything below
 frontend/index.tsx        popup lifecycle: hook, wait, deliver   (Steam's CEF)
 frontend/notification.ts  React tree -> typed notification (feeds the log)
-frontend/replay.ts        stash Steam's own click handler per toast; invoke it
+frontend/click.ts         validate/encode the durable click envelope
+frontend/replay.ts        stash Steam's handler by random token; invoke it
+frontend/routes.ts        verified durable fallback catalog
 frontend/choose.ts        which handler a click may invoke (pure, offline-tested)
 frontend/fiber.ts         the __reactFiber discovery both walkers share
 frontend/log.ts           dlog/safeJson; prefixes are capture's contract
-frontend/clickbridge.ts   every click: .click file -> replay by toast name
+frontend/clickbridge.ts   replay on matching surface; live-focus fallback otherwise
 frontend/devfire.ts       tools/fire door, gated by a setting
 frontend/Settings.tsx     settings panel; settings.ts, per-key config store
 backend/main.lua          marshaller + per-OS spawn seam (Millennium Lua host)
 tools/notify-action       escaping, delivery; a click writes .click (POSIX sh,
                           packed as a .star asset, materialized to ~/.cache)
 tools/notify-action.ps1   Windows delivery: WinRT toast, protocol-activation
-                          click (EXPERIMENTAL, unvalidated on real hardware)
+                          click + one-shot route-aware focus (EXPERIMENTAL)
 tools/click-handler.js    the snn: URI handler: validate, write .click
                           (wscript //B, registered by the ps1's -Setup)
 ```

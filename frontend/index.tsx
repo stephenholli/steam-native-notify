@@ -1,12 +1,18 @@
 import { definePlugin, ffi, IconsModule } from 'millennium';
-import { notificationFromToast } from './notification';
+import { CLICK_PAYLOAD_PREFIX, captureAppIdFromToastName, encodeClickEnvelope, focusKindFor, newClickToken } from './click';
+import { typeName } from './generated/notifications';
+import { setIdentity } from './identity';
+import { notificationFromToast, takeToastBrowserInfo, type DecodedNotification } from './notification';
 import { dlog, safeJson } from './log';
-import { armClickBridge } from './clickbridge';
+import { startClickBridge } from './clickbridge';
+import { rememberToastContext, trackOverlayFocus } from './overlay';
+import { clientOverlayAction, clientRoute, serverRoute } from './routes';
 import { startDevFirePoll } from './devfire';
 import { stashToastHandler } from './replay';
 import { registerSteamUrlClicks } from './steamurl';
 import { SettingsPanel } from './Settings';
-import { loadSettings, settings } from './settings';
+import { loadSettings, parseCallableJson, settings } from './settings';
+import { loadUrlTemplates } from './urlstore';
 
 /**
  * Steam draws every notification as its own CEF popup window, named
@@ -48,6 +54,7 @@ const TOAST_PREFIX = 'notificationtoasts_';
  * why everything used to travel as one JSON string.)
  */
 const notify = ffi<[string, string, string, string, string], string>('Notify');
+const identity = ffi<[], string>('Identity');
 
 /**
  * The popup window exists before it has painted, so a single settle delay is a
@@ -63,6 +70,12 @@ const MANAGER_RETRY_LIMIT = 60; // ~30s, covers a cold Steam start
 /** Toast names already sent, so a re-fired callback cannot double-notify. */
 const delivered = new Set<string>();
 const registrations: Registration[] = [];
+
+function routeFor(notification: DecodedNotification): string | null {
+	return notification.source === 'client'
+		? clientRoute(notification.type, notification.fields)
+		: serverRoute(notification.server);
+}
 
 // --------------------------------------------------------------------------
 // toast capture
@@ -148,48 +161,65 @@ function deliverToast(win: Window, name: string, text: string): void {
 	// names (notificationtoasts_uid<appid>-...) mean the game was focused,
 	// _desktop names mean it was not -- even with a game running.
 	const overlayCtx = name.startsWith('notificationtoasts_uid');
-	// Stash Steam's own click handler before the popup can be closed; the
-	// token routes the click back to it (replay.ts). No proven handler, no
-	// token: the notification arrives unclickable, mirroring Steam.
-	const route = stashToastHandler(win, name);
+	rememberToastContext(overlayCtx, takeToastBrowserInfo());
 
-	// The decode no longer routes anything; it feeds the from-toast log line,
-	// which is what tools/capture and every diagnosis in this repo read.
-	// Type numbers map to names via docs/notification-types.md; the client
-	// payload is the raw positional array (docs/regeneration.md has the
-	// schema that used to name its fields).
 	let type: number | undefined;
+	let kind: string | undefined;
+	let catalogRoute: string | null = null;
+	let overlayAction: string | null = null;
 	try {
 		if (fromToast) {
 			type = fromToast.type;
+			kind = typeName(type);
+			catalogRoute = routeFor(fromToast);
+			if (fromToast.source === 'client') overlayAction = clientOverlayAction(type, fromToast.fields);
 			const detail =
 				fromToast.source === 'server'
 					? `server type=${fromToast.server.type} url=${fromToast.server.url ?? ''} body=${safeJson(fromToast.server.body)}`
-					: `array=${safeJson(fromToast.raw)}`;
-			dlog(`from-toast ${name} type=${fromToast.type} source=${fromToast.source} ${detail}`.slice(0, 700));
+					: `fields=${safeJson(fromToast.fields)}`;
+			dlog(`from-toast ${name} type=${type} (${kind}) source=${fromToast.source} ${detail}`.slice(0, 700));
 		}
 	} catch (e) {
 		dlog(`from-toast ${name} failed: ${(e as Error)?.message ?? e}`);
+		catalogRoute = null;
+		overlayAction = null;
 	}
 	// A suppressed toast is left entirely to Steam: nothing sent, popup not
 	// closed (hideSteamToast included). Capture and the logs above still run.
 	const suppressed = overlayCtx ? !settings().notifyInGame : !settings().notifyOutsideGame;
+	let clickPayload = '';
+	let replayable = false;
+	const fallback = catalogRoute ?? (overlayAction ? `action:${overlayAction}` : null);
+	if (!suppressed) {
+		try {
+			const token = newClickToken();
+			replayable = stashToastHandler(win, name, token);
+			const captureAppId = captureAppIdFromToastName(name);
+			if (captureAppId !== null && (replayable || fallback)) {
+				clickPayload =
+					CLICK_PAYLOAD_PREFIX +
+					encodeClickEnvelope({
+						v: 1,
+						token,
+						captureAppId,
+						fallback,
+						focus: focusKindFor(type, fallback),
+					});
+			}
+		} catch (e) {
+			dlog(`click envelope failed for ${name}: ${(e as Error)?.message ?? e}`);
+		}
+	}
 	dlog(
-		`toast ${name} -> ${safeJson({ title, body, image, type, route })}` +
+		`toast ${name} -> ${safeJson({ title, body, image, type, kind, replayable, fallback, click: Boolean(clickPayload) })}` +
 			(suppressed ? ` (suppressed: ${overlayCtx ? 'in-game' : 'desktop'} notifications off)` : ''),
 	);
 	// The backend/notify-action contract is unchanged (five positional args);
-	// the replay token travels in the route slot and comes back through the
-	// click file verbatim, so neither end needed to learn about replay.
+	// the click envelope travels in the route slot and returns through the
+	// platform's action transport.
 	const notifyResult: Promise<string> | null = suppressed
 		? null
-		: notify(title, body, image ?? '', route ?? '', '');
-
-	// notify-action delivers every click back through a file; arm the bridge
-	// that picks it up and chooses the surface by live focus (clickbridge.ts).
-	// A suppressed toast arms it too: arming only ever extends the window, and
-	// an earlier desktop notification may still be waiting for its click.
-	armClickBridge();
+		: notify(title, body, image ?? '', clickPayload, '');
 
 	// Closing Steam's own popup is what stops a notification being reported
 	// twice. Done here rather than with a compositor rule because the plugin
@@ -212,6 +242,16 @@ function deliverToast(win: Window, name: string, text: string): void {
 				}
 			})
 			.catch((e: unknown) => dlog(`toast ${name} left open: notify failed: ${(e as Error)?.message ?? e}`));
+	}
+}
+
+async function loadIdentity(): Promise<void> {
+	try {
+		const parsed = parseCallableJson<{ steamid64?: string }>(await identity(), {});
+		const id = setIdentity(parsed?.steamid64);
+		dlog(`identity: steamid64=${id ?? '(none)'}`);
+	} catch (e) {
+		dlog(`identity failed: ${(e as Error)?.message ?? e}`);
 	}
 }
 
@@ -273,11 +313,14 @@ function pluginIcon(): any {
 
 export default definePlugin(() => {
 	void loadSettings();
+	void loadIdentity();
+	void loadUrlTemplates().then((summary) => dlog(`url templates: ${summary}`));
+	trackOverlayFocus();
 	installHook();
 	startDevFirePoll();
-	// The Windows click path: a toast carries steam://snn/replay/<toast>
-	// and Steam dispatches it here. Additive on every platform; Linux
-	// clicks still ride the click file (steamurl.ts).
+	startClickBridge();
+	// Windows returns the durable envelope through steam://snn/click/<payload>.
+	// Linux returns the same envelope through the click file.
 	const steamUrl = registerSteamUrlClicks();
 
 	return {

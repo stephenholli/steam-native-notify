@@ -6,15 +6,16 @@
 # entirely, so [Windows.UI.Notifications...] type activation throws there.
 #
 # Spawned by backend/main.lua (CreateProcessW, CREATE_NO_WINDOW), one process
-# per notification. A routed toast waits while its live banner can report
-# activation; unrouted toasts exit after Show(). The toast carries
-# activationType="protocol" launching steam://snn/replay/..., which Steam hands
-# to the client's JS. The activation callback only foregrounds Steam through
-# Windows' built-in WScript.Shell; no registered COM activator or binary.
+# per notification. Delivery exits after Show(). The toast carries
+# activationType="protocol" launching steam://snn/click/<payload>, which Steam
+# hands to the client's JS. After routing, the backend starts this script once
+# more with -FocusKind to raise the matching main or chat window briefly; no
+# resident process, registered COM activator, or binary.
 #
 # Usage: notify-action.ps1 -Setup            register AUMID branding (idempotent)
 #        notify-action.ps1 -Teardown         remove the registration and the icon
 #        notify-action.ps1 -Id <id>          deliver <id>.notify from the runtime directory
+#        notify-action.ps1 -FocusKind <kind> pulse the main or chat window
 #
 # The .notify file carries the same five slots the POSIX helper takes as
 # positional arguments: title, body, image, route, ingame. A file, not a
@@ -22,6 +23,8 @@
 
 param(
     [string]$Id,
+    [ValidateSet('chat', 'main')]
+    [string]$FocusKind,
     [switch]$Setup,
     [switch]$Teardown
 )
@@ -97,30 +100,31 @@ if ($Teardown) {
     exit 0
 }
 
-if (-not $Id) { exit 2 }
+if (-not $Id -and -not $FocusKind) { exit 2 }
 
 # ---------------------------------------------------------------- delivery
 
-$NotifyFile = Join-Path $RuntimeDir "$Id.notify"
-if (-not (Test-Path -LiteralPath $NotifyFile)) { exit 1 }
-try {
-    # The backend writes the payload as UTF-8; Windows PowerShell 5.1 reads
-    # ANSI unless told otherwise, which mangled every non-ASCII character
-    # (an em dash rendered as three bytes of mojibake on a real toast).
-    $Payload = Get-Content -LiteralPath $NotifyFile -Raw -Encoding UTF8 | ConvertFrom-Json
-} catch {
-    Write-PluginLog "payload $Id unreadable, notification dropped: $($_.Exception.Message)"
-    Remove-Item -LiteralPath $NotifyFile -Force -ErrorAction SilentlyContinue
-    exit 1
+$Payload = $null
+if ($Id) {
+    $NotifyFile = Join-Path $RuntimeDir "$Id.notify"
+    if (-not (Test-Path -LiteralPath $NotifyFile)) { exit 1 }
+    try {
+        # The backend writes UTF-8; Windows PowerShell 5.1 otherwise assumes ANSI.
+        $Payload = Get-Content -LiteralPath $NotifyFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        Write-PluginLog "payload $Id unreadable, notification dropped: $($_.Exception.Message)"
+        Remove-Item -LiteralPath $NotifyFile -Force -ErrorAction SilentlyContinue
+        exit 1
+    }
+    Remove-Item -LiteralPath $NotifyFile -Force
 }
-Remove-Item -LiteralPath $NotifyFile -Force
 
 # The notification platform can wedge under bursts ("The notification
 # platform is unavailable", recovery is service restart or reboot). After
 # one such failure every send inside the back-off window is dropped with a
 # log line instead of hammering the service.
 $Backoff = Join-Path $RuntimeDir '.wpn-backoff'
-if ((Test-Path -LiteralPath $Backoff) -and
+if ($Id -and (Test-Path -LiteralPath $Backoff) -and
     ((Get-Date) - (Get-Item -LiteralPath $Backoff).LastWriteTime).TotalSeconds -lt 60) {
     Write-PluginLog "delivery suppressed during platform back-off: $($Payload.title)"
     exit 1
@@ -203,7 +207,6 @@ function Esc([string]$Text) { [System.Security.SecurityElement]::Escape($Text) }
 $FocusSinkSource = @'
 using System;
 using System.Diagnostics;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -211,8 +214,6 @@ using System.Threading;
 public static class SnnToastFocus
 {
     private delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
-    private static readonly ManualResetEventSlim Signal = new ManualResetEventSlim(false);
-    private static string result;
 
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
@@ -221,33 +222,21 @@ public static class SnnToastFocus
     private static extern bool IsWindowVisible(IntPtr window);
 
     [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter,
+        int x, int y, int width, int height, uint flags);
+
+    [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
 
-    public static string Result
+    private static IntPtr FindSteamWindow(bool chat)
     {
-        get { return result; }
-    }
-
-    public static void Reset()
-    {
-        result = "waiting";
-        Signal.Reset();
-    }
-
-    private static void Complete(string value)
-    {
-        if (Interlocked.CompareExchange(ref result, value, "waiting") == "waiting")
-        {
-            Signal.Set();
-        }
-    }
-
-    private static int FindSteamWindowProcessId()
-    {
-        int found = 0;
+        IntPtr found = IntPtr.Zero;
         EnumWindows(delegate(IntPtr window, IntPtr parameter)
         {
             if (!IsWindowVisible(window))
@@ -257,10 +246,13 @@ public static class SnnToastFocus
 
             StringBuilder title = new StringBuilder(256);
             GetWindowText(window, title, title.Capacity);
-            if (!String.Equals(title.ToString(), "Steam", StringComparison.Ordinal))
+            string windowTitle = title.ToString();
+            if (String.IsNullOrWhiteSpace(windowTitle))
             {
                 return true;
             }
+            bool main = String.Equals(windowTitle, "Steam", StringComparison.Ordinal);
+            if (chat == main) return true;
 
             uint processId;
             GetWindowThreadProcessId(window, out processId);
@@ -270,7 +262,7 @@ public static class SnnToastFocus
                 if (String.Equals(process.ProcessName, "steamwebhelper",
                     StringComparison.OrdinalIgnoreCase))
                 {
-                    found = (int)processId;
+                    found = window;
                     return false;
                 }
             }
@@ -280,83 +272,84 @@ public static class SnnToastFocus
         return found;
     }
 
-    private static bool AppActivate(int processId)
+    private static string DescribeWindow(IntPtr window)
     {
-        object shell = null;
-        try
-        {
-            Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-            if (shellType == null)
-            {
-                return false;
-            }
-            shell = Activator.CreateInstance(shellType);
-            object activated = shellType.InvokeMember(
-                "AppActivate",
-                BindingFlags.InvokeMethod,
-                null,
-                shell,
-                new object[] { processId }
-            );
-            return activated is bool && (bool)activated;
-        }
-        finally
-        {
-            if (shell != null && Marshal.IsComObject(shell))
-            {
-                Marshal.FinalReleaseComObject(shell);
-            }
-        }
+        if (window == IntPtr.Zero) return "none";
+        uint processId;
+        GetWindowThreadProcessId(window, out processId);
+        StringBuilder title = new StringBuilder(256);
+        GetWindowText(window, title, title.Capacity);
+        string processName = "missing";
+        try { processName = Process.GetProcessById((int)processId).ProcessName; }
+        catch {}
+        return processId + ":" + processName + ":" + title.ToString();
     }
 
-    public static void OnActivated(object sender, object arguments)
+    public static string Raise(string kind)
     {
         try
         {
-            int processId = FindSteamWindowProcessId();
-            if (processId == 0)
+            const uint SWP_NOSIZE = 0x0001;
+            const uint SWP_NOMOVE = 0x0002;
+            const uint SWP_SHOWWINDOW = 0x0040;
+            IntPtr HWND_TOPMOST = new IntPtr(-1);
+            IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+
+            bool chat = String.Equals(kind, "chat", StringComparison.Ordinal);
+            IntPtr target = IntPtr.Zero;
+            DateTime deadline = DateTime.UtcNow.AddSeconds(4);
+            while (target == IntPtr.Zero && DateTime.UtcNow < deadline)
             {
-                Complete("activated target-missing");
-                return;
+                target = FindSteamWindow(chat);
+                if (target == IntPtr.Zero) Thread.Sleep(100);
             }
-            Complete(AppActivate(processId)
-                ? "activated foregrounded"
-                : "activated focus-failed");
+            if (target == IntPtr.Zero)
+            {
+                return "target-missing kind=" + kind;
+            }
+            IntPtr before = GetForegroundWindow();
+            bool topmost = SetWindowPos(target, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            Thread.Sleep(350);
+            bool restored = SetWindowPos(target, HWND_NOTOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            Thread.Sleep(250);
+            return "raised kind=" + kind
+                + " topmost=" + topmost
+                + " restored=" + restored
+                + " target=" + DescribeWindow(target)
+                + " before=" + DescribeWindow(before)
+                + " after=" + DescribeWindow(GetForegroundWindow());
         }
         catch (Exception error)
         {
-            Complete("activated focus-error: " + error.GetType().Name);
+            return "focus-error: " + error.GetType().Name;
         }
-    }
-
-    public static void OnDismissed(object sender, object arguments)
-    {
-        Complete("dismissed");
-    }
-
-    public static void OnFailed(object sender, object arguments)
-    {
-        Complete("failed");
-    }
-
-    public static bool Wait(int milliseconds)
-    {
-        return Signal.Wait(milliseconds);
     }
 }
 '@
+
+if ($FocusKind) {
+    try {
+        Add-Type -TypeDefinition $FocusSinkSource
+        $result = [SnnToastFocus]::Raise($FocusKind)
+        Write-PluginLog "focus: $result"
+        if ($result -like 'raised *') { exit 0 }
+    } catch {
+        Write-PluginLog "focus: helper failed: $($_.Exception.Message)"
+    }
+    exit 1
+}
 
 # activationType="protocol": Windows launches the URI on a banner or Action
 # Center click. The scheme is Steam's own -- measured on Windows 11, a toast
 # launches schemes Windows already knows (ms-settings:, http:, steam:) and
 # silently refuses one this plugin registers itself. Steam hands steam://snn/...
-# to the client's JS, where frontend/steamurl.ts invokes the stashed handler.
-# The live helper also receives Activated and asks Windows to foreground Steam;
-# Action Center remains protocol-only after that helper exits. No route means
-# the toast is deliberately inert, mirroring Steam's own.
+# to the client's JS, where frontend/steamurl.ts dispatches the envelope.
+# No route means the toast is deliberately inert, mirroring Steam's own.
 $ToastAttrs = ''
-if ($Route -match '^replay:([A-Za-z0-9_.\-]+)$') {
-    $ToastAttrs = " activationType=`"protocol`" launch=`"steam://snn/replay/$($Matches[1])`""
+if ($Route -match '^click:([A-Za-z0-9_-]+)$') {
+    $ToastAttrs = " activationType=`"protocol`" launch=`"steam://snn/click/$($Matches[1])`""
 }
 $ImageXml = ''
 if ($Icon) {
@@ -375,42 +368,7 @@ try {
     $doc = New-Object Windows.Data.Xml.Dom.XmlDocument
     $doc.LoadXml($Xml)
     $toast = New-Object Windows.UI.Notifications.ToastNotification $doc
-    $FocusBound = $false
-    if ($Route -match '^replay:[A-Za-z0-9_.\-]+$') {
-        try {
-            Add-Type -TypeDefinition $FocusSinkSource
-            [SnnToastFocus]::Reset()
-
-            $activatedEvent = $toast.GetType().GetEvent('Activated')
-            $activatedMethod = [SnnToastFocus].GetMethod('OnActivated')
-            $activatedHandler = [Delegate]::CreateDelegate(
-                $activatedEvent.EventHandlerType, $activatedMethod)
-            $activatedToken = $toast.add_Activated($activatedHandler)
-
-            $dismissedEvent = $toast.GetType().GetEvent('Dismissed')
-            $dismissedMethod = [SnnToastFocus].GetMethod('OnDismissed')
-            $dismissedHandler = [Delegate]::CreateDelegate(
-                $dismissedEvent.EventHandlerType, $dismissedMethod)
-            $dismissedToken = $toast.add_Dismissed($dismissedHandler)
-
-            $failedEvent = $toast.GetType().GetEvent('Failed')
-            $failedMethod = [SnnToastFocus].GetMethod('OnFailed')
-            $failedHandler = [Delegate]::CreateDelegate(
-                $failedEvent.EventHandlerType, $failedMethod)
-            $failedToken = $toast.add_Failed($failedHandler)
-            $FocusBound = $true
-        } catch {
-            Write-PluginLog "focus: callback unavailable, protocol-only: $($_.Exception.Message)"
-        }
-    }
     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($Aumid).Show($toast)
-    if ($FocusBound) {
-        if ([SnnToastFocus]::Wait(120000)) {
-            Write-PluginLog "focus: $([SnnToastFocus]::Result)"
-        } else {
-            Write-PluginLog 'focus: timeout'
-        }
-    }
 } catch {
     if ($_.Exception.Message -match 'notification platform') {
         New-Item -ItemType File -Path $Backoff -Force | Out-Null

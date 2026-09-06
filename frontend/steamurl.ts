@@ -1,5 +1,6 @@
 import { dlog } from './log';
-import { invokeReplayHandler, raiseSteamWindow, REPLAY_CLICK_PREFIX } from './replay';
+import { clickEnvelopeFromSteamUrl } from './click';
+import { dispatchClick } from './clickbridge';
 
 /**
  * The Windows click transport: Steam's own steam:// dispatch.
@@ -13,8 +14,9 @@ import { invokeReplayHandler, raiseSteamWindow, REPLAY_CLICK_PREFIX } from './re
  * client's JS, where this plugin lives.
  *
  * `RegisterForRunSteamURL` takes any section name (Millennium registers
- * `millennium` the same way), so a Windows toast carries
- * `steam://snn/replay/<toast-name>` and lands here with the token intact.
+ * `millennium` the same way), so a Windows toast carries a versioned envelope
+ * in `steam://snn/click/<base64url>`. Windows keeps that URI with notification
+ * history, so its verified catalog fallback survives a Steam restart.
  *
  * Linux keeps the click file: notify-send hands the click back to a helper
  * this plugin owns, which needs no round trip through Steam. Registering
@@ -32,17 +34,6 @@ interface SteamUrlApi {
 }
 
 /**
- * `steam://snn/replay/<toast-name>` -> the toast name, or null for anything
- * else. Steam passes the URL through verbatim, so this end validates it: the
- * only shape ever emitted is one replay token of the characters Steam's own
- * popup names use.
- */
-export function replayNameFromSteamUrl(url: string): string | null {
-	const match = /^steam:\/{1,2}snn\/replay\/([A-Za-z0-9_.-]+)\/?$/.exec(url.trim());
-	return match ? match[1] : null;
-}
-
-/**
  * Never throws: a failed registration must leave delivery untouched, and an
  * older client without the API simply has no Windows click path.
  */
@@ -55,19 +46,18 @@ export function registerSteamUrlClicks(): Unregisterable | null {
 		}
 		const registration = api.RegisterForRunSteamURL(URL_SECTION, (_n: number, url: string) => {
 			try {
-				const name = replayNameFromSteamUrl(String(url ?? ''));
-				if (!name) {
+				const envelope = clickEnvelopeFromSteamUrl(String(url ?? ''));
+				if (!envelope) {
 					dlog(`steam-url: ignored ${String(url).slice(0, 120)}`);
 					return;
 				}
-				dlog(`steam-url: ${REPLAY_CLICK_PREFIX}${name}`);
-				raiseSteamWindow();
-				if (!invokeReplayHandler(name)) dlog('steam-url: replay did not run');
+				dlog(`steam-url: click token=${envelope.token.slice(0, 8)}`);
+				void dispatchClick(envelope);
 			} catch (e) {
 				dlog(`steam-url handler failed: ${(e as Error)?.message ?? e}`);
 			}
 		});
-		dlog(`steam-url: registered steam://${URL_SECTION}/replay/<toast>`);
+		dlog(`steam-url: registered steam://${URL_SECTION}/click/<payload>`);
 		return registration;
 	} catch (e) {
 		dlog(`steam-url: registration failed: ${(e as Error)?.message ?? e}`);
