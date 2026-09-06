@@ -8,8 +8,9 @@ description = "Mirrors Steam's in-client notification toasts to the desktop noti
 [assets]
 # The backend materializes each platform's delivery files out of the .star at
 # load (backend/main.lua, materialize_asset); a .star is never unpacked on
-# disk. POSIX runs notify-action; Windows runs notify-action.ps1 (clicks
-# there ride Steam's own steam:// dispatch, so there is no click handler).
+# disk. POSIX runs notify-action; Windows runs notify-action.ps1. Both return
+# clicks through the registered canonical Steam URL, so no private URL handler
+# asset is needed.
 resources = [
     "tools/notify-action",
     "tools/notify-action.ps1",

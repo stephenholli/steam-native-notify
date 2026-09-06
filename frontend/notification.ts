@@ -1,30 +1,90 @@
 import { firstFiber } from './fiber';
+import { validSteamFallback } from './click';
+import { fieldsForType } from './generated/notifications';
+import {
+	DEFAULT_STEAM_ROUTE,
+	MILLENNIUM_UPDATES_ROUTE,
+	type PbValue,
+	type ServerNotification,
+} from './routes';
 
 /**
  * "React tree -> typed notification", in one place.
  *
  * Steam attaches its own decoded notification object to the toast's React
- * tree: `{ eType, eSource, data, ... }`. Client-sourced (eSource 1), `data`
- * is a Closure protobuf whose values sit POSITIONALLY in `array`;
- * server-sourced (2), a plain rollup whose `item.body_data` is JSON
- * (docs/steam-routing.md). The decode feeds ONLY the from-toast log line,
- * so the client payload passes through as the raw array -- the schema that
- * named its fields left with the catalog (docs/regeneration.md §2;
- * docs/notification-types.md maps the type numbers).
+ * tree: `{ eType, eSource, data, ... }`. Client-sourced data is a Closure
+ * protobuf whose positional array is decoded with the generated schema;
+ * server-sourced data is a rollup whose `item.body_data` is JSON.
  */
 export type DecodedNotification =
-	| { source: 'client'; type: number; raw: unknown[] }
-	| { source: 'server'; type: number; server: ServerNotification };
-
-/** The server (eSource=2) rollup, as the toast components receive it. */
-export interface ServerNotification {
-	type: number;
-	body: Record<string, unknown> | null;
-	url?: string;
-}
+	| { source: 'client'; type: number; fields: Record<string, PbValue> }
+	| { source: 'server'; type: number; server: ServerNotification }
+	| {
+			source: 'millennium';
+			type: number;
+			kind: 'MillenniumUpdate' | 'MillenniumAction' | 'MillenniumUnknown';
+			fallback: string;
+		};
 
 /** eSource on Steam's notification object: which of the two systems produced it. */
 const SOURCE_SERVER = 2;
+
+// Current update titles from Millennium's 20 registered locales at commit
+// 5cbebb86628767f365de987c451a2839afe153bc. They classify routing only; the
+// native notification always displays Steam's already-localized DOM text.
+const MILLENNIUM_UPDATE_TITLES = new Set([
+	'Aggiornamenti disponibili!',
+	'Aggiornamento di Millennium disponibile',
+	'Atualizações disponíveis!',
+	'Có cập nhật mới!',
+	'Disponible actualización de Millennium',
+	'Dostępne aktualizacje!',
+	'Frissítések érhetők el!',
+	'Güncellemeler Mevcut!',
+	'Millennium Update Available',
+	'Millennium-Update verfügbar',
+	'Mises à jour disponibles !',
+	'Pembaruan tersedia!',
+	'Tillgängliga uppdateringar!',
+	'Updates Available!',
+	'Updates beschikbaar!',
+	'Updates verfügbar!',
+	'¡Actualizaciones Disponibles!',
+	'¡Actualizaciones disponibles!',
+	'Доступно обновление Millennium',
+	'Доступны обновления!',
+	'Доступні оновлення!',
+	'アップデートが利用可能です！',
+	'更新可用！',
+	'有可用更新！',
+	'업데이트 가능!',
+]);
+
+type MillenniumKind = 'MillenniumUpdate' | 'MillenniumAction' | 'MillenniumUnknown';
+
+function millenniumFallback(data: unknown): { kind: MillenniumKind; route: string } {
+	try {
+		const toast = data as { title?: unknown; onClick?: unknown; activationUrl?: unknown } | null;
+		const activationUrl = validSteamFallback(toast?.activationUrl) ? toast.activationUrl : null;
+		if (activationUrl) {
+			return {
+				kind: activationUrl === MILLENNIUM_UPDATES_ROUTE ? 'MillenniumUpdate' : 'MillenniumAction',
+				route: activationUrl,
+			};
+		}
+		const onClick = toast?.onClick;
+		if (typeof onClick === 'function') {
+			const callbackSource = Function.prototype.toString.call(onClick);
+			const title = typeof toast?.title === 'string' ? toast.title : '';
+			if (callbackSource.includes('/millennium/settings/updates') || MILLENNIUM_UPDATE_TITLES.has(title)) {
+				return { kind: 'MillenniumUpdate', route: MILLENNIUM_UPDATES_ROUTE };
+			}
+		}
+	} catch {
+		/* an opaque callback remains clickable by exact replay */
+	}
+	return { kind: 'MillenniumUnknown', route: DEFAULT_STEAM_ROUTE };
+}
 
 /**
  * The notification Steam attached to the toast, read out of the React tree.
@@ -52,7 +112,15 @@ export function notificationFromToast(win: Window): DecodedNotification | null {
 				const source = Number((notification as any).eSource);
 				const data = (notification as any).data;
 
-				if (source === SOURCE_SERVER) {
+				if ((notification as any).millennium === true) {
+					const fallback = millenniumFallback(data);
+					decoded = {
+						source: 'millennium',
+						type,
+						kind: fallback.kind,
+						fallback: fallback.route,
+					};
+				} else if (source === SOURCE_SERVER) {
 					let body: Record<string, unknown> | null = null;
 					try {
 						const raw = data?.item?.body_data;
@@ -70,11 +138,19 @@ export function notificationFromToast(win: Window): DecodedNotification | null {
 						},
 					};
 				} else {
+					const fields: Record<string, PbValue> = {};
+					const schema = fieldsForType(type);
 					const array = data?.array;
-					decoded = { source: 'client', type, raw: Array.isArray(array) ? array : [] };
+					const offset = typeof data?.arrayIndexOffset_ === 'number' ? data.arrayIndexOffset_ : -1;
+					if (schema && Array.isArray(array)) {
+						for (const [num, field] of Object.entries(schema)) {
+							const value = array[Number(num) + offset];
+							if (value !== undefined && value !== null) fields[field.name] = value as PbValue;
+						}
+					}
+					decoded = { source: 'client', type, fields };
 				}
 			}
-			if (decoded) break;
 			fiber = fiber.return;
 		}
 		return decoded;

@@ -1,14 +1,7 @@
 #!/usr/bin/env node
-// Exercise the frontend's toast decode without Steam.
-//
-// On this branch clicks are replayed from stashed handlers (frontend/replay.ts),
-// so there is no routing subgraph to lock down: the walk and the invoke touch
-// live React fibers and Steam stores that only exist in the running client
-// (verify them with tools/fire --replay against a live Steam). What remains
-// offline-testable is notificationFromToast, which feeds the from-toast log
-// line that every diagnosis in this repo reads.
+// Exercise the Millennium-free click, decode, and chooser subgraph.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,6 +30,16 @@ function is(what, got, want) {
 // non-Millennium host (docs/architecture.md). Indirect imports like './log'
 // are fine; only a direct 'millennium' import breaks the boundary.
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+for (const path of [
+	'frontend/routes.ts',
+	'frontend/urlstore.ts',
+	'frontend/identity.ts',
+	'frontend/overlay.ts',
+	'frontend/generated/notifications.ts',
+	'vendor/steammessages_clientnotificationtypes.proto',
+]) {
+	check(`${path} is present for durable fallback routing`, existsSync(join(root, path)));
+}
 for (const name of ['choose', 'fiber', 'notification', 'replay']) {
 	const source = readFileSync(join(root, 'frontend', `${name}.ts`), 'utf8');
 	check(`frontend/${name}.ts stays free of direct millennium imports`,
@@ -44,34 +47,107 @@ for (const name of ['choose', 'fiber', 'notification', 'replay']) {
 		`frontend/${name}.ts imports 'millennium'; the offline-test boundary forbids that`);
 }
 
-// --- steam:// click URL ----------------------------------------------------
+const replaySource = readFileSync(join(root, 'frontend', 'replay.ts'), 'utf8');
+check('replay handlers have no time-based expiry', !replaySource.includes('CLICK_WINDOW_MS'));
+check('replay handlers retain at most 256 delivered clicks', /STASH_MAX\s*=\s*256/.test(replaySource));
+check('replay diagnostic metadata is bounded per click',
+	/candidates:\s*candidates\.slice\(0,\s*LOG_CANDIDATES_MAX\)\.map\(toMeta\)/.test(replaySource));
 
-// The Windows click transport: Steam dispatches steam://snn/replay/<toast> to
-// the client's JS (frontend/steamurl.ts). The parser is the trust boundary --
-// Steam passes the URL through verbatim, so only the one shape this plugin
-// emits may reach the replay stash. Parsed here by the same regex the module
-// uses; keep them in step.
-const REPLAY_URL = /^steam:\/{1,2}snn\/replay\/([A-Za-z0-9_.-]+)\/?$/;
-const replayName = (url) => {
-	const m = REPLAY_URL.exec(String(url).trim());
-	return m ? m[1] : null;
-};
-check('steam-url: a replay URL yields the toast name',
-	replayName('steam://snn/replay/notificationtoasts_10001_desktop') === 'notificationtoasts_10001_desktop');
-check('steam-url: a single-slash URL is accepted (Steam normalizes both)',
-	replayName('steam:/snn/replay/notificationtoasts_2_desktop') === 'notificationtoasts_2_desktop');
-check('steam-url: a trailing slash is tolerated',
-	replayName('steam://snn/replay/toast_1/') === 'toast_1');
-for (const bad of [
-	'steam://snn/replay/',
-	'steam://snn/other/toast_1',
-	'steam://millennium/settings',
-	'steam://snn/replay/../../etc/passwd',
-	'steam://snn/replay/toast 1',
-	'snn:replay/toast_1',
-	'',
-]) {
-	check(`steam-url: refuses ${JSON.stringify(bad)}`, replayName(bad) === null);
+// --- durable click envelope ------------------------------------------------
+
+let click = null;
+try {
+	click = loadFrontendModules(['click']).click;
+	check('durable click module loads', true);
+} catch (error) {
+	check('durable click module loads', false, String(error));
+}
+
+if (click) {
+	const token = '00112233445566778899aabbccddeeff';
+	const envelope = {
+		v: 1,
+		token,
+		captureAppId: 0,
+		fallback: 'steam://friends/message/76561198000000000',
+		focus: 'chat',
+	};
+	const encoded = click.encodeClickEnvelope(envelope);
+	is('click envelope round trips', JSON.stringify(click.decodeClickEnvelope(encoded)), JSON.stringify(envelope));
+	is('click-file payload round trips', JSON.stringify(click.decodeClickPayload(`click:${encoded}`)), JSON.stringify(envelope));
+	is('canonical notification URL round trips',
+		JSON.stringify(click.clickEnvelopeFromSteamUrl(`steam://steam-native-notify/notification/${encoded}`)), JSON.stringify(envelope));
+	is('canonical single-slash URL round trips',
+		JSON.stringify(click.clickEnvelopeFromSteamUrl(`steam:/steam-native-notify/notification/${encoded}/`)), JSON.stringify(envelope));
+	is('canonical URL formats once',
+		click.steamNotificationUrl(encoded), `steam://steam-native-notify/notification/${encoded}`);
+	is('legacy snn URL is refused',
+		click.clickEnvelopeFromSteamUrl(`steam://snn/click/${encoded}`), null);
+
+	is('desktop toast captures appid 0', click.captureAppIdFromToastName('notificationtoasts_10000_desktop'), 0);
+	is('Millennium desktop toast captures appid 0',
+		click.captureAppIdFromToastName('notificationtoasts_undefined_desktop'), 0);
+	is('future desktop toast identities do not block replay',
+		click.captureAppIdFromToastName('notificationtoasts_future-format_desktop'), 0);
+	is('overlay toast captures its appid', click.captureAppIdFromToastName('notificationtoasts_uid570-10001'), 570);
+	is('another real overlay toast form captures its appid',
+		click.captureAppIdFromToastName('notificationtoasts_uid553850-10002'), 553850);
+	is('future overlay toast identities do not block replay',
+		click.captureAppIdFromToastName('notificationtoasts_uid570-future-format'), 570);
+	for (const name of [
+		'notificationtoasts_',
+		'notificationtoasts_vr',
+		'notificationtoasts_10000',
+		'notificationtoasts_10000_desktop_extra',
+		'notificationtoasts_10000_desktop\n',
+		'notificationtoasts_uidbogus-10001',
+		'notificationtoasts_uid570-',
+		'notificationtoasts_uid570-42_desktop',
+		'notificationtoasts_uid570-10001\n',
+		'notificationtoasts_uid0-10001',
+		'notificationtoasts_uid-570-10001',
+		'notificationtoasts_uid4294967296-10001',
+	]) {
+		is(`unconfirmed toast surface is rejected: ${name}`, click.captureAppIdFromToastName(name), null);
+	}
+	is('unknown popup is rejected', click.captureAppIdFromToastName('SP Desktop'), null);
+	is('same desktop surface matches', click.surfaceMatches(0, 0), true);
+	is('desktop and overlay surfaces differ', click.surfaceMatches(0, 570), false);
+	is('same overlay app matches', click.surfaceMatches(570, 570), true);
+	is('different overlay apps differ', click.surfaceMatches(570, 730), false);
+	is('matching live handler prefers replay', click.deliveryMode?.(envelope, 0, true), 'replay');
+	is('surface change chooses the fallback', click.deliveryMode?.(envelope, 570, true), 'fallback');
+	is('missing post-restart handler chooses the fallback', click.deliveryMode?.(envelope, 0, false), 'fallback');
+	is('no handler and no fallback does nothing',
+		click.deliveryMode?.({ ...envelope, fallback: null }, 0, false), 'none');
+	is('a mismatched handler without fallback does nothing',
+		click.deliveryMode?.({ ...envelope, fallback: null }, 570, true), 'none');
+
+	is('friend messages focus chat', click.focusKindFor(8, envelope.fallback), 'chat');
+	is('friend routes focus chat', click.focusKindFor(999, envelope.fallback), 'chat');
+	is('group-chat actions focus chat', click.focusKindFor(9, 'action:chatroom:7:8'), 'chat');
+	is('achievements focus the main window', click.focusKindFor(5, 'steam://openurl/https://steamcommunity.com/x'), 'main');
+
+	const tokenA = click.newClickToken();
+	const tokenB = click.newClickToken();
+	check('random click token is 128-bit hex', /^[a-f0-9]{32}$/.test(tokenA), tokenA);
+	check('random click tokens do not reuse popup identity', tokenA !== tokenB);
+
+	for (const bad of [
+		'',
+		'not-base64',
+		click.encodeClickEnvelope({ ...envelope, v: 2 }),
+		click.encodeClickEnvelope({ ...envelope, token: 'notificationtoasts_10000_desktop' }),
+		click.encodeClickEnvelope({ ...envelope, captureAppId: -1 }),
+		click.encodeClickEnvelope({ ...envelope, fallback: 'file:///etc/passwd' }),
+		click.encodeClickEnvelope({ ...envelope, fallback: 'steam://millennium/settings/\u00a0updates' }),
+		click.encodeClickEnvelope({ ...envelope, fallback: `steam://millennium/${'😀'.repeat(1990)}` }),
+		click.encodeClickEnvelope({ ...envelope, focus: 'other' }),
+	]) {
+		is(`malformed click envelope is refused: ${JSON.stringify(bad).slice(0, 50)}`, click.decodeClickEnvelope(bad), null);
+	}
+	is('old toast-name replay URL is refused',
+		click.clickEnvelopeFromSteamUrl('steam://snn/replay/notificationtoasts_10000_desktop'), null);
 }
 
 // --- notificationFromToast -------------------------------------------------
@@ -97,7 +173,7 @@ const client = notification.notificationFromToast(
 check('client toast decodes', client !== null && client.source === 'client', JSON.stringify(client));
 if (client?.source === 'client') {
 	is('client toast carries the type', client.type, 1);
-	is('client toast passes the raw array through', JSON.stringify(client.raw), JSON.stringify(clientArray));
+	is('client toast decodes appid by field number', client.fields.appid, 570);
 }
 
 const srv = notification.notificationFromToast(
@@ -123,9 +199,183 @@ const deep = notification.notificationFromToast(
 	toastWindow(fiberChain({ eType: 1, eSource: 1, data: { array: clientArray } }, 2)),
 );
 check('notification found up the fiber.return chain',
-	deep?.source === 'client' && deep.raw[0] === 570, JSON.stringify(deep));
+	deep?.source === 'client' && deep.fields.appid === 570, JSON.stringify(deep));
+
+const millenniumUpdate = notification.notificationFromToast(
+	toastWindow(fiberChain({
+		eType: 12,
+		eSource: 1,
+		millennium: true,
+		data: {
+			title: 'Updates Available!',
+			body: 'Millennium found 1 available update',
+			onClick: function wrappedAction() {},
+		},
+	}, 0)),
+);
+check('Millennium update toast carries its durable route',
+	millenniumUpdate?.source === 'millennium' &&
+		millenniumUpdate.fallback === 'steam://millennium/settings/updates',
+	JSON.stringify(millenniumUpdate));
+
+const millenniumSelfUpdate = notification.notificationFromToast(
+	toastWindow(fiberChain({
+		eType: 12,
+		eSource: 1,
+		millennium: true,
+		data: {
+			title: 'Millennium Update Available',
+			body: 'A new version of Millennium is available! Click here to update.',
+			onClick: function wrappedAction() {},
+		},
+	}, 0)),
+);
+check('Millennium self-update toast carries its durable route',
+	millenniumSelfUpdate?.source === 'millennium' &&
+		millenniumSelfUpdate.fallback === 'steam://millennium/settings/updates',
+	JSON.stringify(millenniumSelfUpdate));
+
+const millenniumUpdateTitles = [
+	'Aggiornamenti disponibili!',
+	'Aggiornamento di Millennium disponibile',
+	'Atualizações disponíveis!',
+	'Có cập nhật mới!',
+	'Disponible actualización de Millennium',
+	'Dostępne aktualizacje!',
+	'Frissítések érhetők el!',
+	'Güncellemeler Mevcut!',
+	'Millennium Update Available',
+	'Millennium-Update verfügbar',
+	'Mises à jour disponibles !',
+	'Pembaruan tersedia!',
+	'Tillgängliga uppdateringar!',
+	'Updates Available!',
+	'Updates beschikbaar!',
+	'Updates verfügbar!',
+	'¡Actualizaciones Disponibles!',
+	'¡Actualizaciones disponibles!',
+	'Доступно обновление Millennium',
+	'Доступны обновления!',
+	'Доступні оновлення!',
+	'アップデートが利用可能です！',
+	'更新可用！',
+	'有可用更新！',
+	'업데이트 가능!',
+];
+for (const title of millenniumUpdateTitles) {
+	const localized = notification.notificationFromToast(
+		toastWindow(fiberChain({
+			eType: 12,
+			eSource: 1,
+			millennium: true,
+			data: { title, body: 'localized body', onClick() {} },
+		}, 0)),
+	);
+	check(`localized Millennium update routes durably: ${title}`,
+		localized?.source === 'millennium' &&
+			localized.kind === 'MillenniumUpdate' &&
+			localized.fallback === 'steam://millennium/settings/updates',
+		JSON.stringify(localized));
+}
+
+const millenniumActivation = notification.notificationFromToast(
+	toastWindow(fiberChain({
+		eType: 12,
+		eSource: 1,
+		millennium: true,
+		data: {
+			title: 'Plugin action',
+			body: 'Open the sidebar',
+			onClick() {},
+			activationUrl: 'steam://millennium/sidebar',
+		},
+	}, 0)),
+);
+check('an explicit Millennium activation URL becomes the durable route',
+	millenniumActivation?.source === 'millennium' &&
+		millenniumActivation.kind === 'MillenniumAction' &&
+		millenniumActivation.fallback === 'steam://millennium/sidebar',
+	JSON.stringify(millenniumActivation));
+
+const millenniumActivationWithoutCallback = notification.notificationFromToast(
+	toastWindow(fiberChain({
+		eType: 12,
+		eSource: 1,
+		millennium: true,
+		data: {
+			title: 'Plugin action',
+			body: 'Open the sidebar',
+			activationUrl: 'steam://millennium/sidebar',
+		},
+	}, 0)),
+);
+check('an explicit Millennium activation URL does not require a live callback',
+	millenniumActivationWithoutCallback?.source === 'millennium' &&
+		millenniumActivationWithoutCallback.kind === 'MillenniumAction' &&
+		millenniumActivationWithoutCallback.fallback === 'steam://millennium/sidebar',
+	JSON.stringify(millenniumActivationWithoutCallback));
+
+const unsafeMillenniumActivation = notification.notificationFromToast(
+	toastWindow(fiberChain({
+		eType: 12,
+		eSource: 1,
+		millennium: true,
+		data: { title: 'Plugin action', body: 'Open a page', onClick() {}, activationUrl: 'https://example.com' },
+	}, 0)),
+);
+check('a non-Steam Millennium activation URL uses only the neutral fallback',
+	unsafeMillenniumActivation?.source === 'millennium' &&
+		unsafeMillenniumActivation.kind === 'MillenniumUnknown' &&
+		unsafeMillenniumActivation.fallback === 'steam://open/main',
+	JSON.stringify(unsafeMillenniumActivation));
+
+for (const activationUrl of [
+	'steam://millennium/settings/\u00a0updates',
+	`steam://millennium/${'😀'.repeat(1990)}`,
+]) {
+	const invalidActivation = notification.notificationFromToast(
+		toastWindow(fiberChain({
+			eType: 12,
+			eSource: 1,
+			millennium: true,
+			data: { title: 'Plugin action', body: 'Open a page', activationUrl },
+		}, 0)),
+	);
+	check('an unsafe or oversized Millennium activation URL uses the neutral fallback',
+		invalidActivation?.source === 'millennium' &&
+			invalidActivation.kind === 'MillenniumUnknown' &&
+			invalidActivation.fallback === 'steam://open/main',
+		JSON.stringify(invalidActivation));
+}
+
+const localizedWithoutCallback = notification.notificationFromToast(
+	toastWindow(fiberChain({
+		eType: 12,
+		eSource: 1,
+		millennium: true,
+		data: { title: '更新可用！', body: 'localized body' },
+	}, 0)),
+);
+check('a localized Millennium update title without a callback remains unknown',
+	localizedWithoutCallback?.source === 'millennium' &&
+		localizedWithoutCallback.kind === 'MillenniumUnknown' &&
+		localizedWithoutCallback.fallback === 'steam://open/main',
+	JSON.stringify(localizedWithoutCallback));
+
+const millenniumUnknown = notification.notificationFromToast(
+	toastWindow(fiberChain({ eType: 12, eSource: 1, millennium: true, data: { onClick() {} } }, 0)),
+);
+check('unknown Millennium toast carries only the general Steam fallback',
+	millenniumUnknown?.source === 'millennium' &&
+		millenniumUnknown.fallback === 'steam://open/main',
+	JSON.stringify(millenniumUnknown));
 
 is('a window with no fiber yields null', notification.notificationFromToast(toastWindow(null)), null);
+
+const { toasttext } = loadFrontendModules(['toasttext']);
+const localizedText = toasttext.splitToastText('更新可用！\nMillennium 找到了 1 个可用的插件');
+check('rendered localized toast text is reused without translation',
+	localizedText.title === '更新可用！' && localizedText.body === 'Millennium 找到了 1 个可用的插件');
 
 // --- chooseHandler ---------------------------------------------------------
 

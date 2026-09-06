@@ -1,8 +1,9 @@
 import { dlog } from './log';
-import { invokeReplayHandler, raiseSteamWindow, REPLAY_CLICK_PREFIX } from './replay';
+import { clickEnvelopeFromSteamUrl, STEAM_URL_RESOURCE, STEAM_URL_SECTION } from './click';
+import { dispatchClick } from './clickbridge';
 
 /**
- * The Windows click transport: Steam's own steam:// dispatch.
+ * The cross-platform click transport: Steam's own steam:// dispatch.
  *
  * A desktop notification cannot reach this plugin directly on Windows.
  * Measured on Windows 11 (docs/platforms.md): a toast activates
@@ -13,16 +14,14 @@ import { invokeReplayHandler, raiseSteamWindow, REPLAY_CLICK_PREFIX } from './re
  * client's JS, where this plugin lives.
  *
  * `RegisterForRunSteamURL` takes any section name (Millennium registers
- * `millennium` the same way), so a Windows toast carries
- * `steam://snn/replay/<toast-name>` and lands here with the token intact.
+ * `millennium` the same way), so a toast carries a versioned envelope
+ * in `steam://steam-native-notify/notification/<base64url>`. Windows stores
+ * that URI in the toast; Linux launches it after a live default action.
  *
- * Linux keeps the click file: notify-send hands the click back to a helper
- * this plugin owns, which needs no round trip through Steam. Registering
- * here is additive on every platform -- a second door to the same stash,
- * never a replacement for the bridge.
+ * Quickshell also receives the fixed `steam`, URL argv pair that Quattro can
+ * keep with notification history. Both platforms therefore enter the same
+ * validated dispatcher without persisting a JavaScript closure.
  */
-const URL_SECTION = 'snn';
-
 interface Unregisterable {
 	unregister(): void;
 }
@@ -32,19 +31,8 @@ interface SteamUrlApi {
 }
 
 /**
- * `steam://snn/replay/<toast-name>` -> the toast name, or null for anything
- * else. Steam passes the URL through verbatim, so this end validates it: the
- * only shape ever emitted is one replay token of the characters Steam's own
- * popup names use.
- */
-export function replayNameFromSteamUrl(url: string): string | null {
-	const match = /^steam:\/{1,2}snn\/replay\/([A-Za-z0-9_.-]+)\/?$/.exec(url.trim());
-	return match ? match[1] : null;
-}
-
-/**
  * Never throws: a failed registration must leave delivery untouched, and an
- * older client without the API simply has no Windows click path.
+ * older client without the API simply has no notification click path.
  */
 export function registerSteamUrlClicks(): Unregisterable | null {
 	try {
@@ -53,21 +41,20 @@ export function registerSteamUrlClicks(): Unregisterable | null {
 			dlog('steam-url: RegisterForRunSteamURL unavailable; no steam:// click path');
 			return null;
 		}
-		const registration = api.RegisterForRunSteamURL(URL_SECTION, (_n: number, url: string) => {
+		const registration = api.RegisterForRunSteamURL(STEAM_URL_SECTION, (_n: number, url: string) => {
 			try {
-				const name = replayNameFromSteamUrl(String(url ?? ''));
-				if (!name) {
+				const envelope = clickEnvelopeFromSteamUrl(String(url ?? ''));
+				if (!envelope) {
 					dlog(`steam-url: ignored ${String(url).slice(0, 120)}`);
 					return;
 				}
-				dlog(`steam-url: ${REPLAY_CLICK_PREFIX}${name}`);
-				raiseSteamWindow();
-				if (!invokeReplayHandler(name)) dlog('steam-url: replay did not run');
+				dlog(`steam-url: click token=${envelope.token.slice(0, 8)}`);
+				void dispatchClick(envelope);
 			} catch (e) {
 				dlog(`steam-url handler failed: ${(e as Error)?.message ?? e}`);
 			}
 		});
-		dlog(`steam-url: registered steam://${URL_SECTION}/replay/<toast>`);
+		dlog(`steam-url: registered steam://${STEAM_URL_SECTION}/${STEAM_URL_RESOURCE}/<payload>`);
 		return registration;
 	} catch (e) {
 		dlog(`steam-url: registration failed: ${(e as Error)?.message ?? e}`);

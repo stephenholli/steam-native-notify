@@ -1,19 +1,21 @@
 # Deliver one Steam notification as a Windows toast, and register what a
-# click needs. EXPERIMENTAL: nothing in this file has run on a real Windows
-# machine yet; docs/platforms.md lists the validation pass.
+# click needs. EXPERIMENTAL: validated on one Windows 11 VM;
+# docs/platforms.md records the tested surface and remaining gaps.
 #
 # Windows PowerShell 5.1 only: pwsh (6+) removed WinRT projection support
 # entirely, so [Windows.UI.Notifications...] type activation throws there.
 #
 # Spawned by backend/main.lua (CreateProcessW, CREATE_NO_WINDOW), one process
-# per notification, exiting right after Show(): clicks are not waited for.
-# The toast carries activationType="protocol" launching steam://snn/replay/...,
-# which Steam hands to the client's JS, where frontend/steamurl.ts invokes the
-# stashed handler -- no resident process, no COM activator, no vendored binary.
+# per notification. Delivery exits after Show(). The toast carries
+# activationType="protocol" launching Steam's canonical notification URI,
+# which Steam hands to the client's JS. After routing, the backend starts this script once
+# more with -FocusKind to raise the matching main or chat window briefly; no
+# resident process, registered COM activator, or binary.
 #
 # Usage: notify-action.ps1 -Setup            register AUMID branding (idempotent)
 #        notify-action.ps1 -Teardown         remove the registration and the icon
 #        notify-action.ps1 -Id <id>          deliver <id>.notify from the runtime directory
+#        notify-action.ps1 -FocusKind <kind> pulse the main or chat window
 #
 # The .notify file carries the same five slots the POSIX helper takes as
 # positional arguments: title, body, image, route, ingame. A file, not a
@@ -21,6 +23,8 @@
 
 param(
     [string]$Id,
+    [ValidateSet('chat', 'main')]
+    [string]$FocusKind,
     [switch]$Setup,
     [switch]$Teardown
 )
@@ -79,8 +83,9 @@ if ($Setup) {
     } catch {
         Write-PluginLog "setup: icon extraction failed, DisplayName-only branding: $($_.Exception.Message)"
     }
-    # No URI scheme of our own: clicks ride steam://snn/... (see the launch
-    # attribute below). An earlier build registered an "snn:" scheme here;
+    # No URI scheme of our own: clicks ride Steam's canonical notification URI
+    # (see the launch attribute below). An earlier build registered an "snn:"
+    # scheme here;
     # remove it so an upgrade leaves nothing behind.
     if (Test-Path -Path $SchemeKey) { Remove-Item -Path $SchemeKey -Recurse -Force }
     Write-PluginLog 'setup: AUMID branding registered'
@@ -96,30 +101,31 @@ if ($Teardown) {
     exit 0
 }
 
-if (-not $Id) { exit 2 }
+if (-not $Id -and -not $FocusKind) { exit 2 }
 
 # ---------------------------------------------------------------- delivery
 
-$NotifyFile = Join-Path $RuntimeDir "$Id.notify"
-if (-not (Test-Path -LiteralPath $NotifyFile)) { exit 1 }
-try {
-    # The backend writes the payload as UTF-8; Windows PowerShell 5.1 reads
-    # ANSI unless told otherwise, which mangled every non-ASCII character
-    # (an em dash rendered as three bytes of mojibake on a real toast).
-    $Payload = Get-Content -LiteralPath $NotifyFile -Raw -Encoding UTF8 | ConvertFrom-Json
-} catch {
-    Write-PluginLog "payload $Id unreadable, notification dropped: $($_.Exception.Message)"
-    Remove-Item -LiteralPath $NotifyFile -Force -ErrorAction SilentlyContinue
-    exit 1
+$Payload = $null
+if ($Id) {
+    $NotifyFile = Join-Path $RuntimeDir "$Id.notify"
+    if (-not (Test-Path -LiteralPath $NotifyFile)) { exit 1 }
+    try {
+        # The backend writes UTF-8; Windows PowerShell 5.1 otherwise assumes ANSI.
+        $Payload = Get-Content -LiteralPath $NotifyFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        Write-PluginLog "payload $Id unreadable, notification dropped: $($_.Exception.Message)"
+        Remove-Item -LiteralPath $NotifyFile -Force -ErrorAction SilentlyContinue
+        exit 1
+    }
+    Remove-Item -LiteralPath $NotifyFile -Force
 }
-Remove-Item -LiteralPath $NotifyFile -Force
 
 # The notification platform can wedge under bursts ("The notification
 # platform is unavailable", recovery is service restart or reboot). After
 # one such failure every send inside the back-off window is dropped with a
 # log line instead of hammering the service.
 $Backoff = Join-Path $RuntimeDir '.wpn-backoff'
-if ((Test-Path -LiteralPath $Backoff) -and
+if ($Id -and (Test-Path -LiteralPath $Backoff) -and
     ((Get-Date) - (Get-Item -LiteralPath $Backoff).LastWriteTime).TotalSeconds -lt 60) {
     Write-PluginLog "delivery suppressed during platform back-off: $($Payload.title)"
     exit 1
@@ -199,17 +205,153 @@ $Icon = Limit-IconSize (Resolve-Icon ([string]$Payload.image))
 
 function Esc([string]$Text) { [System.Security.SecurityElement]::Escape($Text) }
 
-# activationType="protocol": Windows launches the URI on a click, banner or
-# Action Center, with no process of ours alive. The scheme is Steam's own --
-# measured on Windows 11 (docs/platforms.md), a toast will launch schemes
-# Windows already knows (ms-settings:, http:, steam:) and silently refuses
-# one this plugin registers itself, however it is registered. Steam hands
-# steam://snn/... to the client's JS, where frontend/steamurl.ts invokes the
-# stashed handler. No route means the toast is deliberately inert, mirroring
-# Steam's own.
+$FocusSinkSource = @'
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+
+public static class SnnToastFocus
+{
+    private delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr window);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter,
+        int x, int y, int width, int height, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
+
+    private static IntPtr FindSteamWindow(bool chat)
+    {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr window, IntPtr parameter)
+        {
+            if (!IsWindowVisible(window))
+            {
+                return true;
+            }
+
+            StringBuilder title = new StringBuilder(256);
+            GetWindowText(window, title, title.Capacity);
+            string windowTitle = title.ToString();
+            if (String.IsNullOrWhiteSpace(windowTitle))
+            {
+                return true;
+            }
+            bool main = String.Equals(windowTitle, "Steam", StringComparison.Ordinal);
+            if (chat == main) return true;
+
+            uint processId;
+            GetWindowThreadProcessId(window, out processId);
+            try
+            {
+                Process process = Process.GetProcessById((int)processId);
+                if (String.Equals(process.ProcessName, "steamwebhelper",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    found = window;
+                    return false;
+                }
+            }
+            catch {}
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    private static string DescribeWindow(IntPtr window)
+    {
+        if (window == IntPtr.Zero) return "none";
+        uint processId;
+        GetWindowThreadProcessId(window, out processId);
+        StringBuilder title = new StringBuilder(256);
+        GetWindowText(window, title, title.Capacity);
+        string processName = "missing";
+        try { processName = Process.GetProcessById((int)processId).ProcessName; }
+        catch {}
+        return processId + ":" + processName + ":" + title.ToString();
+    }
+
+    public static string Raise(string kind)
+    {
+        try
+        {
+            const uint SWP_NOSIZE = 0x0001;
+            const uint SWP_NOMOVE = 0x0002;
+            const uint SWP_SHOWWINDOW = 0x0040;
+            IntPtr HWND_TOPMOST = new IntPtr(-1);
+            IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+
+            bool chat = String.Equals(kind, "chat", StringComparison.Ordinal);
+            IntPtr target = IntPtr.Zero;
+            DateTime deadline = DateTime.UtcNow.AddSeconds(4);
+            while (target == IntPtr.Zero && DateTime.UtcNow < deadline)
+            {
+                target = FindSteamWindow(chat);
+                if (target == IntPtr.Zero) Thread.Sleep(100);
+            }
+            if (target == IntPtr.Zero)
+            {
+                return "target-missing kind=" + kind;
+            }
+            IntPtr before = GetForegroundWindow();
+            bool topmost = SetWindowPos(target, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            Thread.Sleep(350);
+            bool restored = SetWindowPos(target, HWND_NOTOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            Thread.Sleep(250);
+            return "raised kind=" + kind
+                + " topmost=" + topmost
+                + " restored=" + restored
+                + " target=" + DescribeWindow(target)
+                + " before=" + DescribeWindow(before)
+                + " after=" + DescribeWindow(GetForegroundWindow());
+        }
+        catch (Exception error)
+        {
+            return "focus-error: " + error.GetType().Name;
+        }
+    }
+}
+'@
+
+if ($FocusKind) {
+    try {
+        Add-Type -TypeDefinition $FocusSinkSource
+        $result = [SnnToastFocus]::Raise($FocusKind)
+        Write-PluginLog "focus: $result"
+        if ($result -like 'raised *') { exit 0 }
+    } catch {
+        Write-PluginLog "focus: helper failed: $($_.Exception.Message)"
+    }
+    exit 1
+}
+
+# activationType="protocol": Windows launches the URI on a banner or Action
+# Center click. The scheme is Steam's own -- measured on Windows 11, a toast
+# launches schemes Windows already knows (ms-settings:, http:, steam:) and
+# silently refuses one this plugin registers itself. Steam hands the canonical
+# notification URI to the client's JS, where frontend/steamurl.ts dispatches
+# the envelope.
+# No route means the toast is deliberately inert, mirroring Steam's own.
 $ToastAttrs = ''
-if ($Route -match '^replay:([A-Za-z0-9_.\-]+)$') {
-    $ToastAttrs = " activationType=`"protocol`" launch=`"steam://snn/replay/$($Matches[1])`""
+if ($Route -cmatch '\Aclick:([A-Za-z0-9_-]{1,8192})\z') {
+    $ToastAttrs = " activationType=`"protocol`" launch=`"steam://steam-native-notify/notification/$($Matches[1])`""
 }
 $ImageXml = ''
 if ($Icon) {

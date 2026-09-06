@@ -7,9 +7,9 @@
 # plugin backend for the notification's lifetime and serialise every
 # notification behind the last one.
 #
-# Usage: notify-action <title> <body> [image] [steam-url] [ingame-action]
+# Usage: notify-action <title> <body> [image] [click-route] [ingame-action]
 #        notify-action --resolve-icon <url>              print the resolved icon path
-#        notify-action --click-plan <steam-url> [action] print what a click would run
+#        notify-action --notification-url <click-route>  print the durable activation URL
 #        notify-action --escape-markup <text>            print the escaped form
 #        notify-action --daemon-caps                     body-markup | plain
 #
@@ -96,16 +96,18 @@ fi
 # not draw.
 ACTION="default"
 
-# Actions only survive while the popup is live. Omarchy's shell drops an expired
-# popup into history as a "restored row" with no live actions, after which a
-# click can only dismiss. 0 means it waits for the user instead of expiring.
-EXPIRE=0
-
 title=${1:-Steam}
 body=${2:-}
 image=${3:-}
 route=${4:-}
-ingame_action=${5:-}
+
+notification_url() {
+	payload=${1#click:}
+	[ "$payload" != "$1" ] || return 1
+	case $payload in '' | *[!A-Za-z0-9_-]*) return 1 ;; esac
+	[ "${#payload}" -le 8192 ] || return 1
+	printf 'steam://steam-native-notify/notification/%s\n' "$payload"
+}
 
 # A daemon that advertises `body-markup` parses the body as markup, and a
 # bare `<` or `&` from a chat message would be swallowed or mangled. Only the
@@ -125,6 +127,16 @@ daemon_parses_markup() {
 		--method org.freedesktop.Notifications.GetCapabilities 2>/dev/null) || return 0
 	case $caps in
 	*body-markup*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+daemon_is_quickshell() {
+	server_info=$(gdbus call --session --dest org.freedesktop.Notifications \
+		--object-path /org/freedesktop/Notifications \
+		--method org.freedesktop.Notifications.GetServerInformation 2>/dev/null) || return 1
+	case $server_info in
+	'ssss "quickshell" '* | "('quickshell',"*) return 0 ;;
 	*) return 1 ;;
 	esac
 }
@@ -195,29 +207,6 @@ resolve_icon() {
 	fi
 }
 
-# Every click rides the bridge: the payload (route or action token) is written
-# to a click file that the plugin's click bridge (frontend/clickbridge.ts)
-# consumes from inside Steam, where live state picks the surface. Only the
-# bridge can: it checks which game window is focused at click time and opens
-# the overlay doors for that game, or raises the desktop window (creating it
-# via steam://open/main when closed to the tray) and navigates through the
-# client's own URL executor. An external steam:// invocation from here cannot
-# make that choice: the client's handlers pick the overlay whenever a game is
-# merely RUNNING, and raise the main window over a focused game.
-#
-# The one accepted loss: the bridge dies with Steam, so a click landing after
-# Steam has fully quit does nothing, where the old external `steam` invocation
-# could boot the client. The popup, and with it the click, only survives ~8s
-# on this daemon, so that window is rare enough to document rather than keep a
-# second delivery path for.
-click_plan() {
-	if [ -z "${1:-}" ] && [ -z "${2:-}" ]; then
-		echo none
-	else
-		echo overlay
-	fi
-}
-
 # Resolution is the fiddliest part and the easiest to get wrong silently, so it
 # is exposed for testing: notify-action --resolve-icon <url>
 if [ "${1:-}" = "--resolve-icon" ]; then
@@ -225,9 +214,9 @@ if [ "${1:-}" = "--resolve-icon" ]; then
 	exit 0
 fi
 
-if [ "${1:-}" = "--click-plan" ]; then
-	click_plan "${2:-}" "${3:-}"
-	exit 0
+if [ "${1:-}" = "--notification-url" ]; then
+	notification_url "${2:-}"
+	exit $?
 fi
 
 # Escaping is easy to get wrong silently, so it is exposed for testing like
@@ -262,6 +251,10 @@ icon=$(resolve_icon "$image")
 if daemon_parses_markup; then
 	body=$(escape_markup "$body")
 fi
+activation_url=""
+if converted=$(notification_url "$route"); then
+	activation_url=$converted
+fi
 
 # A file-backed icon rides the image-path hint as a file:// reference, with -i
 # left as the themed fallback. Through -i, notify-send sends a path as
@@ -276,13 +269,26 @@ fi
 # so no encoding satisfies every daemon. Cache names are sha1 hashes; only a
 # hostile $XDG_CACHE_HOME or $HOME could smuggle those characters in.
 #
-# set -- because POSIX sh has no arrays and a quoted string would word-split
-# on a path with spaces. $1..$5 (consumed into named vars at the top) cease
-# to exist here: everything below must use the named vars.
-case $icon in
-/*) set -- -i "$FALLBACK_ICON" -h "string:image-path:file://$icon" ;;
-*) set -- -i "$icon" ;;
-esac
+# Rebuild argv for every attempt. The daemon can appear between retries, and a
+# recovered Quickshell must receive its durable activation hint on that send.
+send_notification() {
+	# set -- because POSIX sh has no arrays and a quoted string would
+	# word-split on a path with spaces.
+	case $icon in
+	/*) set -- -i "$FALLBACK_ICON" -h "string:image-path:file://$icon" ;;
+	*) set -- -i "$icon" ;;
+	esac
+
+	if [ -n "$activation_url" ] && daemon_is_quickshell; then
+		set -- "$@" -h "string:omarchy-exec-argv:[\"steam\",\"$activation_url\"]"
+	fi
+	if [ -n "$activation_url" ]; then
+		set -- "$@" -A "$ACTION=Open"
+	fi
+
+	notify-send -a "$APP_NAME" -h "string:desktop-entry:$DESKTOP_ENTRY" "$@" \
+		"$title" "$body" 2>/dev/null
+}
 
 # Blocks here. On a click the action name is printed; on dismissal, nothing is.
 #
@@ -292,8 +298,7 @@ esac
 # silently then, so retry for ~30s rather than lose the notification; a
 # machine with no daemon at all gives up quietly.
 tries=0
-until chosen=$(notify-send -a "$APP_NAME" -h "string:desktop-entry:$DESKTOP_ENTRY" "$@" -t "$EXPIRE" \
-	-A "$ACTION=Open" "$title" "$body" 2>/dev/null); do
+until chosen=$(send_notification); do
 	# Retry ONLY while the daemon is absent. A failure with the daemon
 	# reachable is something else (it may even have fired after the toast
 	# displayed), and retrying would re-deliver the same notification.
@@ -308,26 +313,8 @@ until chosen=$(notify-send -a "$APP_NAME" -h "string:desktop-entry:$DESKTOP_ENTR
 done
 
 [ "$chosen" = "$ACTION" ] || exit 0
-
-# Neither a route nor an in-game action means Steam itself does nothing for
-# this notification, so neither does this. Dismissing is the whole behaviour.
-[ -n "$route" ] || [ -n "$ingame_action" ] || exit 0
-
-# The write is stamped (<epoch-seconds>|<payload>): the bridge only polls for
-# 120s after a delivery, so a click landing after it disarms would sit in the
-# file and fire as a surprise on the NEXT arm, up to days later. The bridge
-# drops anything older than 30 seconds.
-case $(click_plan "$route" "$ingame_action") in
-overlay)
-	# Written to a temp name and renamed: several instances block on their
-	# own popups concurrently, and a plain > would let a second click
-	# truncate the first mid-read or clobber it before the bridge's 1s poll.
-	if [ -n "$route" ]; then
-		printf '%s|%s' "$(date +%s)" "$route" >"$RUNTIME_DIR/.click.$$"
-	else
-		printf '%s|action:%s' "$(date +%s)" "$ingame_action" >"$RUNTIME_DIR/.click.$$"
-	fi
-	mv -f "$RUNTIME_DIR/.click.$$" "$RUNTIME_DIR/.click"
-	;;
-esac
+[ -n "$activation_url" ] || exit 0
+command -v steam >/dev/null 2>&1 \
+	|| refuse "steam not found on PATH, activation refused"
+steam "$activation_url" >/dev/null 2>&1 &
 exit 0

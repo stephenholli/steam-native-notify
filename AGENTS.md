@@ -8,37 +8,52 @@ desktop notification daemon, preserving the artwork and the click action.
 vocabulary, verified facts, testing methodology, and dead ends. Read it
 before non-trivial work. `docs/steam-routing.md` is the analysis of Steam's
 own click handling; `docs/notification-types.md` maps type numbers to names;
-`docs/regeneration.md` restores the removed subsystems if ever needed;
+`docs/regeneration.md` records the catalog/schema restoration procedure;
 `docs/platforms.md` is the platform support matrix (Linux native shipped;
-Flatpak paths ready, host unsupported; Windows delivery shipped but
-EXPERIMENTAL and unvalidated on real hardware; macOS refuses to deliver,
-loudly) and the delivery plan for each.
+Flatpak paths ready, host unsupported; Windows canonical activation validated
+programmatically in one VM; macOS refuses to deliver, loudly)
+and the delivery plan for each.
 
 ## State
 
-**Clicks are handler replay.** At capture time frontend/replay.ts walks the
-toast's fiber tree and stashes the click handler Steam attached to it,
-proven by choose.ts (identity twin or sole handler; ambiguity refuses and
-the toast stays unclickable — never a wrong action). A click writes
-`replay:<toast-name>` to `~/.cache/steam-native-notify/.click` and the
-bridge invokes the stash. Known limit, measured in
-docs/experiments/click-replay.md: the handler is frozen to the surface the
-toast rendered on — captured in-game and clicked after the game exits, it
-silently no-ops. The stash holds the latest 8 toasts for 120s; clicks past
-that (or after a Steam restart) do nothing.
+**Clicks are exact replay plus a durable route.** At capture time
+frontend/replay.ts stashes Steam's proved click handler and capture surface
+under a random token; the restored schema/catalog derives a verified fallback.
+The versioned click
+envelope carries token, capture appid, fallback, and Windows focus target. On
+a matching live surface the bridge replays Steam's handler. On a focus change,
+missing stash, replay throw, or Steam restart it dispatches the fallback against
+current focus. Ambiguous handlers are never replayed; a verified catalog
+fallback can still route. The stash's capture surface is authoritative; a URL
+cannot move a callback to another surface. Unknown or contradictory current
+surface discovery refuses dispatch. Group chat has exact replay only because
+its room dispatcher requires session-only toast context. Without either safe
+action, the click is inert.
 
-The previous implementation — a hand-built routing catalog with live-focus
-surface selection, plus the generated protobuf schema — is preserved whole
-on branch `backup/routing-catalog`; `docs/regeneration.md` records what
-each piece was, why it left, and how to bring it back.
+The replay stash retains the latest 256 chosen closures for the Steam session,
+with no time expiry. Heap measurements found current handlers under 0.5KB each
+and no detached documents. The closures stay in RAM and disappear when Steam
+restarts. Durable data is encoded in
+`steam://steam-native-notify/notification/<base64url-envelope>`, not in the
+heap or on plugin disk.
+
+Linux launches that URL after a live `notify-send` default action. Quickshell
+also receives `omarchy-exec-argv` with a fixed `steam`, URL argv pair for
+Quattro history. Other FreeDesktop daemons do not promise a reboot-durable
+executable action. Windows stores the same URL in the WinRT toast. Linux
+validated stored-argv replay and Achievement fallback after restart/cold start;
+UI clicks, visual focus, and shell/login restart remain untested. Windows
+validated canonical history storage, exact replay, and Achievement fallback
+after restart/cold start through active-session protocol invocation. UI clicks,
+visual focus, and a clean guest reboot remain untested. Subsequent surface and
+dispatch-completion fixes have offline coverage only. See `docs/platforms.md`.
 
 ## Commands
 
 ```sh
 bun run build          # type-check, pack + install the .star
 bun run typecheck      # tsc --noEmit on its own
-bun run test           # tools/test-backend (Lua, Millennium stubbed)
-                       # + tools/test-frontend (toast decode + click chooser)
+bun run test           # backend, routes, toast decode, chooser, click dispatch
 tools/capture          # is the running .star current, did the hook attach,
                        # what did the last notifications carry
 tools/fire TestFriendOnline   # push a real test toast through Steam's pipeline
@@ -122,11 +137,12 @@ meaningless, and produced three wrong conclusions in this project.
 **Watch the client while clicking.** A `steam://nav/...` route changes a page
 inside the existing window; unwatched, a working navigation looks like nothing.
 
-**Clicks ride the click bridge, which has windows.** The bridge polls for 120s
-after each delivery and drops clicks older than 30s; a click outside those
-windows (or after Steam quits) does nothing, by design. Every consumed click
-logs a `click-bridge:` line — no line means the bridge was not armed or the
-poll ended.
+**Clicks return through Steam's registered notification URL.** The Linux live
+action launches it directly; Quattro can retain the fixed argv hint in history;
+Windows stores it as the WinRT protocol target. Every accepted click logs a
+`steam-url:` line followed by `click-bridge:` dispatch. No line means the OS
+action did not reach Steam or the frontend is not running. The remaining
+click-file poll is a legacy/test seam, not the Linux notification transport.
 
 **Never fire TestIncomingVoiceChat.** A fake incoming call has no caller to
 hang up: its notification never resolves, and once its toast has shown,
@@ -160,10 +176,11 @@ When adding a route, cite the observation or Steam code path behind it.
 notification to the toast's React tree. The feed misses types entirely: an
 incoming voice chat produces no feed event at all.
 
-**Nothing routes on the decode anymore.** Client payloads are logged as the
-raw positional `data.array` (the schema that named its fields left with the
-catalog; docs/regeneration.md brings it back). Type numbers map to names via
-docs/notification-types.md.
+**Durable routing depends on the generated decode.** Client payload fields are
+decoded from their positional `data.array` using the vendored protobuf schema.
+The named fields feed `routes.ts`; a known malformed payload gets exact replay
+only and otherwise fails closed. A type absent from the catalog opens Steam
+generally after replay is lost. Regenerate through `bun run build`.
 
 **Edit files directly, and verify the edit landed.** Positional splices and loose
 regexes silently dropped edits and deleted a live declaration twice.
@@ -174,18 +191,20 @@ regexes silently dropped edits and deleted a live declaration twice.
 millennium.toml           plugin manifest; starlight packs everything below
 frontend/index.tsx        popup lifecycle: hook, wait, deliver   (Steam's CEF)
 frontend/notification.ts  React tree -> typed notification (feeds the log)
-frontend/replay.ts        stash Steam's own click handler per toast; invoke it
+frontend/toasttext.ts      preserve rendered localized copy; split title/body
+frontend/click.ts         validate/encode the durable click envelope
+frontend/replay.ts        stash Steam's handler by random token; invoke it
+frontend/routes.ts        verified durable fallback catalog
 frontend/choose.ts        which handler a click may invoke (pure, offline-tested)
 frontend/fiber.ts         the __reactFiber discovery both walkers share
 frontend/log.ts           dlog/safeJson; prefixes are capture's contract
-frontend/clickbridge.ts   every click: .click file -> replay by toast name
+frontend/clickbridge.ts   replay on matching surface; live-focus fallback otherwise
 frontend/devfire.ts       tools/fire door, gated by a setting
 frontend/Settings.tsx     settings panel; settings.ts, per-key config store
 backend/main.lua          marshaller + per-OS spawn seam (Millennium Lua host)
-tools/notify-action       escaping, delivery; a click writes .click (POSIX sh,
-                          packed as a .star asset, materialized to ~/.cache)
+tools/notify-action       POSIX delivery; live action launches canonical URL,
+                          Quickshell gets Quattro's fixed argv history hint
 tools/notify-action.ps1   Windows delivery: WinRT toast, protocol-activation
-                          click (EXPERIMENTAL, unvalidated on real hardware)
-tools/click-handler.js    the snn: URI handler: validate, write .click
-                          (wscript //B, registered by the ps1's -Setup)
+                          click + one-shot route-aware focus (EXPERIMENTAL)
+frontend/steamurl.ts      register and validate the canonical Steam URL
 ```

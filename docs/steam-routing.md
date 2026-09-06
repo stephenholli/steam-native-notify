@@ -91,6 +91,27 @@ plugin substitutes it that way.
 | `steam://settings/<token>` | desktop protocol entry `["settings","open/settings"]` → token map `Ga` (line ~505025: `system: "System"`, `controller: "Controller"`, …) → same settings opener the components call | |
 | `steam://openurl/<https url>` | protocol entry `["openurl", ...]` → `SteamWeb` | literally the code `SteamWeb` itself emits for non-steam URLs |
 | `steam://url/<Name>/<params>` | protocol entry `["url", ...]` → `ResolveURL` + `SteamWeb` | the components' `bG(name, ...params)` helper is `SteamWeb(ResolveURL(name, ...params))` (module 18057 `m`/`b`) |
+| `steam://millennium/settings/updates` | Millennium's registered URL handler | same destination as Millennium's built-in update-toast callbacks |
+| `steam://open/main` | Steam's internal main-window opener | neutral fallback only for notification types absent from the catalog; it does not guess a notification destination |
+
+Millennium commit `5cbebb86628767f365de987c451a2839afe153bc` marks synthetic
+notifications with `millennium: true`. Its
+[update service](https://github.com/SteamClientHomebrew/Millennium/blob/5cbebb86628767f365de987c451a2839afe153bc/src/typescript/frontend/utils/update-notification-service.tsx#L39-L63)
+sends both built-in update toasts to `/millennium/settings/updates`, and its
+[URL handler](https://github.com/SteamClientHomebrew/Millennium/blob/5cbebb86628767f365de987c451a2839afe153bc/src/typescript/frontend/utils/url-scheme-handler.ts#L91-L104)
+registers the corresponding Steam URL. The plugin recognizes that literal in
+an unwrapped callback or the update titles shipped for Millennium's 20 active
+locales. That table classifies the route only: the displayed title and body are
+copied from the painted toast. A bounded, whitespace/control-free lowercase
+`steam://` `data.activationUrl` that fits the canonical envelope takes
+precedence for forward compatibility. Millennium's current runtime supplies no
+semantic toast ID or activation URL, so an otherwise unknown callback falls back only to
+`steam://open/main`.
+
+Unknown notifications are the deliberate exception to exact mirroring: their
+captured callback still wins in the same session, but after its loss the plugin
+opens Steam generally. Known Steam notifications whose observed click is inert
+remain inert.
 
 ## Focus
 
@@ -161,6 +182,10 @@ live 2026-08-29, and all minified surfaces that reshuffle across builds):
   objects are NOT valid browserInfo): the dialog is keyed on its `m_unPID`,
   and a wrong object opens on the wrong surface and never reuses an existing
   window.
+- **Group-chat durability limit**: the room dispatcher requires that toast
+  context, and no restart-independent way to obtain it is verified. The current
+  plugin therefore preserves group-chat clicks through exact same-session,
+  same-surface replay only; it emits no durable room action.
 - **Live game focus**:
   `SteamClient.System.UI.RegisterForOverlayGameWindowFocusChanged` is the
   client's own focus signal; the appid whose overlay exists comes from
@@ -180,7 +205,7 @@ live 2026-08-29, and all minified surfaces that reshuffle across builds):
 | 6 | LowBattery | dismiss only (`bt`) | none |
 | 7 | SystemUpdate | `Settings("System")` (`vt`) | `steam://settings/system` |
 | 8 | FriendMessage | `ShowFriendChatDialog(steamid)` (`Rt`; observed). `response_steamurl`, when non-empty, backs only the tray options button and the gamepad "Accept" menu via `OpenURLInClient` — not the desktop body click | `steam://friends/message/<steamid>` |
-| 9 | GroupChatMessage | `ShowChatRoomGroupDialog(chat_group_id, chat_id)` (`Tt`) | none as a URL — no `steam://` entry point reaches that dialog (FriendsUI registers only `friends/message` and `friends/joinchat`, both steamid-keyed). The click bridge makes the same dispatcher call on the clicked surface ("The overlay and the surface doors") |
+| 9 | GroupChatMessage | `ShowChatRoomGroupDialog(chat_group_id, chat_id)` (`Tt`) | no durable fallback; no verified `steam://` entry point reaches that dialog, and its dispatcher requires session-only toast context. Exact replay remains available on the captured surface in the same session |
 | 10 | FriendInviteRollup | `ShowInvitesDialog` (`jt`) | `steam://openurl/<community>profiles/<me64>/friends/pending` — the same destination Steam's *server* FriendInvite component (`Kt`) navigates to on desktop; the dialog itself has no URL |
 | 12 | FamilySharingStopPlaying | none (`kt`) | none |
 | 14 | Screenshot | `nav.Media.Screenshot({id})` (`ot`) | none as a URL — Media item dialogs have no URL; `steam://open/screenshots` is registered for the gamepad UI mode only. The click bridge makes the same navigator call with `screenshot_handle` (the media grid when the handle is missing) |

@@ -3,6 +3,51 @@
 Status: run 2026-08-29, verdict below. Branch: `experiment/click-replay`.
 Main untouched.
 
+## Production follow-up (2026-09-05)
+
+The later Windows durability work changed the cost/benefit decision: the
+hybrid is now implemented. Every click stores a random replay token, capture
+surface, durable fallback, and focus target in a versioned envelope. The bridge
+replays on the same surface and dispatches the fallback against live focus
+otherwise. Known types use observed routes, Millennium updates use Millennium's
+registered URL, and unknown types only open Steam generally. Missing stashes
+after a Steam restart take the same fallback.
+
+Current Linux and Windows delivery encode that envelope in
+`steam://steam-native-notify/notification/<base64url-envelope>`. Linux launches
+the URL after a live default action and gives Quickshell a fixed `steam`, URL
+argv hint for Quattro history. Windows stores it as the WinRT protocol target.
+The closures remain RAM-only. An arbitrary FreeDesktop daemon does not promise
+to persist the executable action across reboot. Linux runtime checks covered
+stored-argv replay and Achievement fallback after restart/cold start. Quattro
+history UI clicks worked with Steam running and fully stopped; live-banner and
+in-game clicks remain untested. The Windows canonical URL VM pass verified
+history storage, exact replay, and Achievement restart/cold-start fallback
+through active-session protocol invocation; UI clicks, visual focus, and a
+clean guest reboot remain untested. The final artifact repeated Achievement
+exact replay and post-restart fallback after the surface and
+dispatch-completion fixes. Group chat retains exact replay but has no durable
+fallback because its room dispatcher requires session-only toast context.
+See `../platforms.md` for the measured scope.
+
+The 120-second limit was transport policy, not a measured memory boundary.
+Forced-GC measurements on live captures found:
+
+| sample | retained bytes | detached documents |
+|---|---:|---:|
+| 8 FriendOnline handlers | 3,796 | 0 |
+| 8 Achievement handlers | 3,364 | 0 |
+| one idle Windows PowerShell helper | 32,763,904 private bytes | n/a |
+
+Production therefore keeps at most 256 replay closures for the Steam session,
+with no time expiry, and removes the per-notification resident PowerShell
+waiter. At the measured upper sample, 256 closures project to roughly 121KB;
+the bound remains defensive because future Steam handlers can capture more.
+Durable routing data is serialized into the OS notification activation URI;
+the closures remain RAM-only and disappear at Steam restart.
+
+## Historical experiment record
+
 ## Results (2026-08-29, run live on Steam + Helldivers 2)
 
 **Verdict: the hypothesis survived every kill test, and full replay still
@@ -52,7 +97,7 @@ for field comparison — branch `feature/replay-click-path` replaces the
 catalog and doors with the replay path end to end, so the frozen-surface
 behavior can be felt in practice rather than argued from cells.
 
-**Recommended path: close the branch.** Full replay is dead: the regression
+**Historical recommendation:** close the full-replay branch. Full replay is dead: the regression
 cannot be detected after the fact (the no-op invoke raises no error to
 trigger a fallback), so a hybrid must decide BEFORE invoking, using exactly
 the live-focus check the bridge already does. That hybrid keeps routes.ts,
@@ -163,7 +208,8 @@ forever is a leak. Bound the stash: latest N (8), expired with the click-arm
 window (clickbridge.ts's `ARM_WINDOW_MS`, 120s), cleared on expiry not on
 popup destroy (the plugin destroys the popup itself; the click comes later).
 The experiment probe may hold entries longer to measure the 10-minute cell;
-production must not.
+production must not. The production follow-up above replaces this unmeasured
+assumption with the forced-GC result and a larger count bound.
 
 **Fragility, both surfaces honestly.** The replay depends on React fiber
 internals (`__reactFiber$` keys, `memoizedProps`, child/sibling traversal)
@@ -219,8 +265,8 @@ trades roughly six shallow, log-observable dependencies for two deep ones.
   destination.
 - No focus-mismatch regressions in step 4 relative to the current bridge, or
   the hybrid fallback covers every regressed cell.
-- The stash is bounded (latest 8, 120s expiry) and holds no detached
-  documents (heap-snapshot spot check is enough).
+- The stash is bounded by measured retained memory and holds no detached
+  documents. Notification lifetime is not coupled to the closure bound.
 
 ## Abort criteria
 
