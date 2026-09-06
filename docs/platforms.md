@@ -13,7 +13,7 @@ awaits its VM pass, and macOS has not run.
 
 | platform | status | delivery | click |
 |---|---|---|---|
-| Linux, native Steam | **shipped**; unified activation verified through Quattro history, restart, and cold start | `notify-send` to the FreeDesktop daemon | live `default` action launches the canonical Steam URL; Quickshell persists the fixed argv for exact replay or durable fallback |
+| Linux, native Steam | **shipped**; stored-argv replay and Achievement restart/cold-start fallback observed; UI clicks and visual focus untested | `notify-send` to the FreeDesktop daemon | live `default` action launches the canonical Steam URL; Quickshell persists the fixed argv for exact replay or durable fallback |
 | Linux, Flatpak Steam | paths ready; the host is unsupported by Millennium | same helper; inside the sandbox libnotify routes through the notification portal (plan) | canonical URL; portal action semantics unverified |
 | macOS | backend paths ready; delivery refused, loudly | terminal-notifier `-execute` (plan) | `-execute` writes `.click` (plan) |
 | Windows | **shipped**, EXPERIMENTAL; unified activation source-reviewed, VM pass pending | WinRT toast via notify-action.ps1 (Windows PowerShell 5.1, no vendored binary): branding, artwork, re-encode | canonical notification URL; exact replay or durable live-focus fallback, then one-shot route-aware focus |
@@ -26,8 +26,8 @@ answers `"unsupported"`. Nothing is delivered and nothing is silent.
 **Shipped:** the frontend closes Steam's own toast only after `Notify`
 answers `"ok"` (frontend/index.tsx), so a platform that cannot deliver -- or
 a failed spawn anywhere -- leaves Steam's own toast alone instead of
-swallowing the notification. Linux live verification rides the branch that
-shipped it.
+swallowing the notification. Earlier Linux live checks covered the transport
+before unification; the current-path measurements below define the tested scope.
 
 ## What differs per platform
 
@@ -153,8 +153,8 @@ The current helper converts a validated `click:<base64url-envelope>` route to
 `steam://steam-native-notify/notification/<base64url-envelope>`. A live
 `notify-send` default action launches `steam` with that URL as one argv element;
 no Linux notification click writes `.click`. The helper requests a 30-second
-timeout and stays detached, so restarting Steam does not remove a still-live
-action.
+timeout and stays detached. Live-action survival across a Steam restart remains
+untested.
 
 When `GetServerInformation` names Quickshell, the helper adds
 `omarchy-exec-argv:["steam","<canonical-url>"]`. Quattro stores that fixed argv

@@ -16,8 +16,10 @@ Current Linux and Windows delivery encode that envelope in
 the URL after a live default action and gives Quickshell a fixed `steam`, URL
 argv hint for Quattro history. Windows stores it as the WinRT protocol target.
 The closures remain RAM-only. An arbitrary FreeDesktop daemon does not promise
-to persist the executable action across reboot. These unified paths await their
-Linux and Windows runtime passes.
+to persist the executable action across reboot. Linux runtime checks covered
+stored-argv replay and Achievement fallback after restart/cold start; UI clicks
+and visual focus remain untested. Windows runtime validation remains pending.
+See `../platforms.md` for the measured scope.
 
 The 120-second limit was transport policy, not a measured memory boundary.
 Forced-GC measurements on live captures found:

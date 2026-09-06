@@ -22,7 +22,8 @@ the restored schema/catalog derives a verified fallback. The versioned click
 envelope carries token, capture appid, fallback, and Windows focus target. On
 a matching live surface the bridge replays Steam's handler. On a focus change,
 missing stash, replay throw, or Steam restart it dispatches the fallback against
-current focus. Ambiguity and uncataloged types fail closed.
+current focus. Ambiguous handlers are never replayed; a verified catalog
+fallback can still route. Without either safe action, the click is inert.
 
 The replay stash retains the latest 256 chosen closures for the Steam session,
 with no time expiry. Heap measurements found current handlers under 0.5KB each
@@ -34,8 +35,10 @@ heap or on plugin disk.
 Linux launches that URL after a live `notify-send` default action. Quickshell
 also receives `omarchy-exec-argv` with a fixed `steam`, URL argv pair for
 Quattro history. Other FreeDesktop daemons do not promise a reboot-durable
-executable action. Windows stores the same URL in the WinRT toast. Linux and
-Windows runtime validation of this unified path remains pending.
+executable action. Windows stores the same URL in the WinRT toast. Linux
+validated stored-argv replay and Achievement fallback after restart/cold start;
+UI clicks, visual focus, and shell/login restart remain untested. Windows
+runtime validation remains pending. See `docs/platforms.md` for the evidence.
 
 ## Commands
 

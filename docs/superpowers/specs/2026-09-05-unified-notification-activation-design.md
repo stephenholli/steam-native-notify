@@ -53,8 +53,13 @@ interface ClickEnvelope {
 
 The URL contains the complete envelope. No OS notification ID or plugin-side
 route file is required to interpret it after restart. The decoder rejects an
-unknown version, malformed token, invalid app ID, unrecognized fallback, or
+unknown version, malformed token, invalid app ID, malformed fallback, or
 unexpected focus target.
+
+Fallback validation accepts known action-token forms or a bounded `steam://`
+URL without ASCII spaces or characters below U+0020. The catalog can mirror Steam's
+server-supplied links, so URL validation is syntactic, not a static destination
+allowlist.
 
 ## Dispatch
 

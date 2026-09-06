@@ -76,9 +76,9 @@ candidates), BFS downward collecting every function-valued
   bookkeeping; invoking anything less leaked toast display slots until no
   toast rendered at all.
 - **sole** — every candidate is one function object; nothing to mis-choose.
-- **refuse** — anything else stays unclickable, the mirror of a Steam toast
-  whose click does nothing. A wrong invoke ACTS (a voice-chat accept answers
-  the call), so there is no fallback and never should be.
+- **refuse** — ambiguous candidates are never invoked. A wrong invoke ACTS
+  (a voice-chat accept answers the call). A separately verified catalog route
+  can still handle the click; without one, the notification remains inert.
 
 A clickable notification crosses the five-position RPC as
 `click:<base64url JSON>`. The helpers expose the same envelope to the OS as
@@ -109,7 +109,9 @@ also sends `omarchy-exec-argv` containing the fixed `steam`, URL pair; Quattro
 can store that vector in its history. Arbitrary FreeDesktop daemons standardize
 the action identifier returned to the sender, not a persistent executable
 command, so reboot-durable history clicks are daemon-specific. The new Linux
-path has offline coverage but still awaits live validation.
+path has offline coverage and runtime evidence for stored-argv replay and
+Achievement fallback after Steam restart/cold start. UI clicks, visual focus,
+and shell/login restart remain untested; see `docs/platforms.md`.
 
 ### Log vocabulary
 
@@ -127,7 +129,7 @@ appends there too when it refuses a platform:
 | `replay: candidates <name> n=K stashed=onClick@D (twin\|sole)` | the walk found and proved a handler |
 | `replay: candidates ... n=0 (no fiber key ...)` | the `__reactFiber` convention moved |
 | `replay: candidates ... portal=miss` | the HostPortal boundary moved (walked the fallback root) |
-| `replay: candidates ... stashed=none (ambiguous)` | several distinct handlers, none provable; unclickable by design |
+| `replay: candidates ... stashed=none (ambiguous)` | no handler is provable; only a verified catalog fallback can act |
 | `replay: candidate <name> #i ...` | per-candidate detail, logged only on anomaly and capped |
 | `click-bridge: replay token=<prefix>` | matching-surface exact replay ran |
 | `click-bridge: fallback <route>` | live-focus catalog dispatch ran |
