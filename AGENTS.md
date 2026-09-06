@@ -51,7 +51,8 @@ tools/mep --methods    # talk to Millennium's external protocol (dev only)
 tools/fire --replay inspect   # dump the stashed handler candidates
 tools/fire --replay invoke    # invoke the latest stashed handler (no click)
 tools/fire.ps1, tools/capture.ps1, tools/mep.ps1   # Windows twins (pwsh 7),
-                              # same subcommands
+                              # same subcommands; live harness in
+                              # tests/windows, plan in docs/windows-testing.md
 tools/notify-action --resolve-icon <url>
 ```
 

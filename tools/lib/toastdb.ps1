@@ -1,6 +1,6 @@
 # The toast oracle: what Windows itself recorded, read out of the notification
 # platform's own database. Dot-sourced by tools/capture.ps1 (the newest toast
-# in section 3).
+# in section 3) and by the live harness (tests/windows/run.ps1).
 #
 # Every toast the platform accepts is stored in
 # %LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db -- the row
@@ -149,6 +149,15 @@ function Get-ToastRows {
     $where = "h.PrimaryId = '$($Aumid -replace "'", "''")'"
     if ($PSBoundParameters.ContainsKey('Since')) { $where += " and n.ArrivalTime > $($Since.ToFileTimeUtc())" }
     Get-NotificationRows -Where $where -Limit $Limit -DbPath $DbPath
+}
+
+function Get-NewestNotificationRow {
+    <#
+      .SYNOPSIS The newest row in the database, whatever app delivered it:
+                what the Notification Center shows at the top of its list.
+    #>
+    param([string]$DbPath)
+    Get-NotificationRows -Limit 1 -DbPath $DbPath
 }
 
 function Get-ToastFacts {

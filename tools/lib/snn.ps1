@@ -1,5 +1,5 @@
 # Shared plumbing for the Windows tools (tools/fire.ps1, tools/capture.ps1,
-# tools/mep.ps1). Dot-source it:
+# tools/mep.ps1) and the live harness (tests/windows). Dot-source it:
 #
 #   . (Join-Path $PSScriptRoot 'lib\snn.ps1')
 #
@@ -133,4 +133,33 @@ function Write-DevFire {
     param([Parameter(Mandatory)][string] $Json, [string] $RuntimeDir = (Get-SnnRuntimeDir))
     [IO.Directory]::CreateDirectory($RuntimeDir) | Out-Null
     [IO.File]::WriteAllText((Join-Path $RuntimeDir '.dev-fire'), "$Json`n", [Text.UTF8Encoding]::new($false))
+}
+
+function Get-ToastQueueVerdict {
+    # Is Steam still granting toast popups? After a long run of test fires
+    # Steam can stop creating them and stay that way until a full restart
+    # (docs/windows-testing.md, "Steam's toast queue stalls in long test
+    # sessions"); from every other angle that looks like a delivery
+    # regression. The tell is fires piling up after the last toast: both
+    # doors count (Steam's own Test* methods and the server path). One
+    # trailing fire is ordinary, Steam gates individual types; two or more
+    # after the last toast is the stall. No log at all is "granting": there
+    # is nothing to hold against Steam yet.
+    param([AllowNull()][AllowEmptyCollection()][string[]] $Lines)
+    if ($null -eq $Lines) { $Lines = @() }
+    $lastToast = -1
+    for ($i = $Lines.Count - 1; $i -ge 0; $i--) {
+        if ($Lines[$i] -cmatch $SnnLog.Delivered) { $lastToast = $i; break }
+    }
+    $after = if ($lastToast + 1 -lt $Lines.Count) { $Lines[($lastToast + 1)..($Lines.Count - 1)] } else { @() }
+    $orphans = @($after | Where-Object { $_ -cmatch $SnnLog.Fire })
+    $text = if ($orphans.Count -eq 0) { 'granting (the last fire produced a toast)' }
+    elseif ($orphans.Count -eq 1) { "1 fire with no toast after it (Steam gates single types; watch the next)" }
+    else { "STALLED -- $($orphans.Count) fires with no toast since the last one; full Steam restart required" }
+    return [pscustomobject]@{
+        OrphanFires = $orphans.Count
+        Newest      = if ($orphans.Count) { $orphans[-1] } else { $null }
+        Stalled     = ($orphans.Count -ge 2)
+        Text        = $text
+    }
 }
