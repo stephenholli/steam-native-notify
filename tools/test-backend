@@ -339,22 +339,23 @@ if executed[1] then
 	check("absent title falls back to the app name", executed[1]:find("'Steam'", 1, true) ~= nil, executed[1])
 end
 
--- notify-action's click plan: every clickable payload rides the bridge, which
--- picks the surface by live focus inside Steam; only a notification with
--- neither route nor action token does nothing on click.
-local function click_plan(route, action)
-	local handle = io.popen(root .. "/tools/notify-action --click-plan '" .. route
-		.. "' '" .. (action or "") .. "'")
-	local plan = handle:read("*l")
+-- notify-action's durable Linux activation seam accepts only the versioned
+-- click envelope transport and maps it onto Steam's canonical URL grammar.
+local encoded = "eyJ2IjoxLCJ0IjoiYWJjIiwiYSI6MCwiZiI6bnVsbH0"
+local activation_url = "steam://steam-native-notify/notification/" .. encoded
+local function notification_url(route)
+	local handle = io.popen(root .. "/tools/notify-action --notification-url '" .. route .. "'")
+	local url = handle:read("*l")
 	handle:close()
-	return plan
+	return url
 end
-check("click plan: chat route rides the bridge", click_plan("steam://friends/message/76561198000000000") == "overlay")
-check("click plan: nav route rides the bridge", click_plan("steam://nav/games/details/570") == "overlay")
-check("click plan: openurl route rides the bridge", click_plan("steam://openurl/https://steamcommunity.com/x") == "overlay")
-check("click plan: settings route rides the bridge", click_plan("steam://settings/system") == "overlay")
-check("click plan: action token rides the bridge", click_plan("", "media") == "overlay")
-check("click plan: no route and no action does nothing", click_plan("") == "none")
+check("notification URL: canonical click envelope",
+	notification_url("click:" .. encoded) == activation_url)
+check("notification URL: empty payload is refused", notification_url("click:") == nil)
+check("notification URL: malformed payload is refused", notification_url("click:a/b") == nil)
+check("notification URL: non-click route is refused", notification_url("steam://nav/games") == nil)
+check("notification URL: oversized payload is refused",
+	notification_url("click:" .. string.rep("a", 8193)) == nil)
 
 -- notify-action's markup escaping: the daemon parses the body as markup, so
 -- what the helper hands notify-send must have &, <, > entity-escaped.
@@ -689,27 +690,123 @@ else
 	print("  skip icon-args (mktemp failed)")
 end
 
--- A clicked route is written to the click file stamped with the write time
--- (<epoch-seconds>|<payload>), so the bridge can reject an abandoned stale
--- file. notify-send is shimmed to report the click.
+-- A valid click envelope becomes one durable Steam URL argument. The action
+-- is attached only for a valid route, and no delivery writes the legacy click
+-- file. Quickshell also receives Omarchy's persistent argv hint and a 30s
+-- timeout; other daemons keep the standard default action without that hint.
 local click_h = io.popen("mktemp -d")
 local click_dir = click_h:read("*l")
 click_h:close()
 if click_dir and click_dir ~= "" then
 	local ns = assert(io.open(click_dir .. "/notify-send", "w"))
-	ns:write("#!/bin/sh\nprintf 'default'\nexit 0\n")
+	ns:write(([[#!/bin/sh
+printf '%%s\n' "$@" > %s/notify-args
+printf 'default'
+exit 0
+]]):format(click_dir))
 	ns:close()
-	io.popen("chmod +x '" .. click_dir .. "/notify-send'"):close()
+	local steam = assert(io.open(click_dir .. "/steam", "w"))
+	steam:write(([[#!/bin/sh
+printf '%%s\n' "$#" > %s/steam-count
+printf '%%s\n' "$@" > %s/steam-args
+exit 0
+]]):format(click_dir, click_dir))
+	steam:close()
+	local gdbus = assert(io.open(click_dir .. "/gdbus", "w"))
+	gdbus:write([[#!/bin/sh
+case "$*" in
+*GetServerInformation*) printf '%s\n' 'ssss "quickshell" "quickshell" "" "1.2"' ;;
+*) printf '%s\n' "(['actions', 'body', 'body-markup'],)" ;;
+esac
+]])
+	gdbus:close()
+	local uname = assert(io.open(click_dir .. "/uname", "w"))
+	uname:write("#!/bin/sh\nprintf 'Linux\\n'\n")
+	uname:close()
+	local date = assert(io.open(click_dir .. "/date", "w"))
+	date:write("#!/bin/sh\nprintf '[test-time]\\n'\n")
+	date:close()
+	io.popen("chmod +x '" .. click_dir .. "/notify-send' '" .. click_dir
+		.. "/steam' '" .. click_dir .. "/gdbus' '" .. click_dir
+		.. "/uname' '" .. click_dir .. "/date'"):close()
+	io.popen("ln -s \"$(command -v sed)\" '" .. click_dir
+		.. "/sed'; ln -s \"$(command -v mv)\" '" .. click_dir .. "/mv'"):close()
 	io.popen("mkdir -p '" .. click_dir .. "/steam-native-notify'"):close()
-	io.popen("XDG_CACHE_HOME='" .. click_dir .. "' PATH='" .. click_dir .. "':\"$PATH\" "
-		.. root .. "/tools/notify-action 'T' 'b' '' 'steam://openurl/x' ''; echo done"):read("*a")
-	local cf = io.open(click_dir .. "/steam-native-notify/.click", "r")
-	local written = cf and cf:read("*a") or "(no click file)"
-	if cf then cf:close() end
-	check("clicked route is written stamped", written:match("^%d+|steam://openurl/x$") ~= nil, tostring(written))
+
+	local function run_delivery(route, action)
+		os.remove(click_dir .. "/notify-args")
+		os.remove(click_dir .. "/steam-count")
+		os.remove(click_dir .. "/steam-args")
+		os.remove(click_dir .. "/steam-native-notify/.click")
+		local h = io.popen("XDG_CACHE_HOME='" .. click_dir .. "' PATH='" .. click_dir .. "':\"$PATH\" "
+			.. root .. "/tools/notify-action 'T' 'b' '' '" .. route .. "' '" .. (action or "")
+			.. "'; i=0; while [ ! -f '" .. click_dir
+			.. "/steam-args' ] && [ \"$i\" -lt 1000 ]; do i=$((i + 1)); done")
+		if h then h:read("*a"); h:close() end
+		return slurp(click_dir .. "/notify-args"), slurp(click_dir .. "/steam-count"),
+			slurp(click_dir .. "/steam-args"), slurp(click_dir .. "/steam-native-notify/.click")
+	end
+
+	local notify_args, steam_count, steam_args, click_file = run_delivery("click:" .. encoded)
+	check("valid activation: notification is delivered", notify_args ~= nil, tostring(notify_args))
+	check("valid activation: default action is attached",
+		notify_args and notify_args:find("-A\ndefault=Open\n", 1, true) ~= nil, tostring(notify_args))
+	check("valid activation: steam receives one argument",
+		steam_count == "1\n" and steam_args == activation_url .. "\n",
+		tostring(steam_count) .. " " .. tostring(steam_args))
+	check("valid activation: Quickshell receives persistent argv hint",
+		notify_args and notify_args:find('-h\nstring:omarchy-exec-argv:["steam","'
+			.. activation_url .. '"]\n', 1, true) ~= nil, tostring(notify_args))
+	check("valid activation: notification expires after 30 seconds",
+		notify_args and notify_args:find("-t\n30000\n", 1, true) ~= nil, tostring(notify_args))
+	check("valid activation: no legacy click file is written", click_file == nil, tostring(click_file))
+
+	-- A live action cannot dispatch without the Steam executable. Keep the
+	-- notification delivery, but refuse the activation in the session log.
+	os.rename(click_dir .. "/steam", click_dir .. "/steam.disabled")
+	os.remove(click_dir .. "/steam-native-notify/plugin.log")
+	local absent = io.popen("XDG_CACHE_HOME='" .. click_dir .. "' PATH='" .. click_dir .. "' "
+		.. root .. "/tools/notify-action 'T' 'b' '' 'click:" .. encoded .. "' ''; echo done")
+	if absent then absent:read("*a"); absent:close() end
+	local absent_log = slurp(click_dir .. "/steam-native-notify/plugin.log")
+	check("valid activation without steam: refusal is logged",
+		absent_log and absent_log:find("steam not found on PATH", 1, true) ~= nil,
+		tostring(absent_log))
+	os.rename(click_dir .. "/steam.disabled", click_dir .. "/steam")
+
+	for _, invalid in ipairs({
+		{ "empty route", "", "" },
+		{ "empty payload", "click:", "" },
+		{ "malformed payload", "click:a/b", "" },
+		{ "non-click route", "steam://nav/games", "" },
+		{ "action without route", "", "media" },
+	}) do
+		notify_args, steam_count, steam_args, click_file = run_delivery(invalid[2], invalid[3])
+		check(invalid[1] .. ": notification is preserved", notify_args ~= nil, tostring(notify_args))
+		check(invalid[1] .. ": no action is attached",
+			notify_args and notify_args:find("-A\n", 1, true) == nil, tostring(notify_args))
+		check(invalid[1] .. ": steam is not launched",
+			steam_count == nil and steam_args == nil, tostring(steam_args))
+		check(invalid[1] .. ": no legacy click file is written", click_file == nil, tostring(click_file))
+	end
+
+	-- Replace the daemon response with a non-Quickshell implementation.
+	gdbus = assert(io.open(click_dir .. "/gdbus", "w"))
+	gdbus:write([[#!/bin/sh
+case "$*" in
+*GetServerInformation*) printf '%s\n' 'ssss "dunst" "knopwob" "1.12.0" "1.2"' ;;
+*) printf '%s\n' "(['actions', 'body', 'body-markup'],)" ;;
+esac
+]])
+	gdbus:close()
+	notify_args, steam_count, steam_args = run_delivery("click:" .. encoded)
+	check("other daemon: Omarchy argv hint is absent",
+		notify_args and notify_args:find("omarchy-exec-argv", 1, true) == nil, tostring(notify_args))
+	check("other daemon: default action remains",
+		notify_args and notify_args:find("-A\ndefault=Open\n", 1, true) ~= nil, tostring(notify_args))
 	io.popen("rm -rf '" .. click_dir .. "'"):close()
 else
-	print("  skip stamped click (mktemp failed)")
+	print("  skip Linux durable activation (mktemp failed)")
 end
 
 -- ---------------------------------------------------------------------------
