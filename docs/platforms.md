@@ -6,14 +6,14 @@ code, and the plan for the platforms that do not deliver yet. Written to be
 pasted into tracking issues. Every platform-specific claim carries a source
 and a status: **verified** against a primary source (its own docs or code),
 or **unverified**. Earlier Linux and Windows activation paths ran natively and
-in a Windows 11 VM. The unified URL path still awaits those runtime passes;
-macOS has not run.
+in a Windows 11 VM. The unified URL path ran on native Linux; Windows still
+awaits its VM pass, and macOS has not run.
 
 ## Matrix
 
 | platform | status | delivery | click |
 |---|---|---|---|
-| Linux, native Steam | **shipped**; unified activation source/offline-tested, live pass pending | `notify-send` to the FreeDesktop daemon | live `default` action launches the canonical Steam URL; Quickshell also gets Quattro's fixed argv history hint |
+| Linux, native Steam | **shipped**; unified activation verified through Quattro history, restart, and cold start | `notify-send` to the FreeDesktop daemon | live `default` action launches the canonical Steam URL; Quickshell persists the fixed argv for exact replay or durable fallback |
 | Linux, Flatpak Steam | paths ready; the host is unsupported by Millennium | same helper; inside the sandbox libnotify routes through the notification portal (plan) | canonical URL; portal action semantics unverified |
 | macOS | backend paths ready; delivery refused, loudly | terminal-notifier `-execute` (plan) | `-execute` writes `.click` (plan) |
 | Windows | **shipped**, EXPERIMENTAL; unified activation source-reviewed, VM pass pending | WinRT toast via notify-action.ps1 (Windows PowerShell 5.1, no vendored binary): branding, artwork, re-encode | canonical notification URL; exact replay or durable live-focus fallback, then one-shot route-aware focus |
@@ -162,8 +162,31 @@ vector with its history record. Other daemons receive only the standard
 FreeDesktop action. That standard returns an action identifier to the waiting
 client but does not define a persistent executable command, so arbitrary-daemon
 history and reboot durability remain best effort. The argv has no shell
-evaluation. These claims are implemented and offline-tested; Task 6 owns live
-banner, Quattro history, Steam restart, and shell restart validation.
+evaluation.
+
+The unified URL path ran on native Linux with Quickshell 1.2, 2026-09-05:
+
+- loaded the current packed artifact after each full Steam restart; the log
+  recorded Linux platform selection, the materialized helper, hook attachment,
+  URL templates, identity, and `steam-url: registered`
+- persisted FriendOnline and Achievement as two-element `execArgv` vectors in
+  Quattro history; executing each stored vector after its banner expired logged
+  `steam-url: click`, `replay: invoke ... returned without throwing`, and
+  `click-bridge: replay`
+- executed a persisted Achievement vector after a full Steam restart; the
+  activation logged `replay: invoke ... no stash entry`,
+  `click-bridge: fallback steam://openurl/.../achievements/`, and the desktop
+  dispatch line. Two initial invocations were delayed, then arrived together;
+  the cold-start run below did not repeat that delay
+- executed the same persisted Achievement vector with Steam fully stopped;
+  Steam started, registered the URL section, accepted the queued activation,
+  and dispatched the catalog fallback six seconds after invocation
+
+Still pending: clicking the live banner and Quattro history card through the
+UI, visual navigation and focus confirmation, a shell/login restart, a host
+reboot, arbitrary FreeDesktop daemons, and real in-game focus changes. The
+measured run executed Quattro's persisted argv directly and did not synthesize
+mouse input.
 
 ## Linux, Flatpak Steam: paths ready, host unsupported
 
