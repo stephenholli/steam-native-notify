@@ -1,5 +1,9 @@
 # Durable Click Routing Design
 
+> Historical implementation record. Unified notification activation supersedes
+> the POSIX click-file and abbreviated Steam URL transport below. See
+> `2026-09-05-unified-notification-activation-design.md` for current behavior.
+
 ## Goal
 
 Keep exact Steam handler replay available for the current Steam session, and

@@ -1,5 +1,9 @@
 # Durable Click Routing Implementation Plan
 
+> Historical implementation record. Unified notification activation supersedes
+> the POSIX click-file and abbreviated Steam URL transport below. See
+> `2026-09-05-unified-notification-activation.md` for the current plan.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add session-long exact replay with restart-safe catalog fallbacks and click-triggered Windows focus.

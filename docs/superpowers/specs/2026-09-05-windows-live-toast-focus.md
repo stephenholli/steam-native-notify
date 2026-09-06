@@ -1,5 +1,8 @@
 # Windows Live Toast Focus
 
+> Historical implementation record. Every URL and retained-helper lifetime
+> below describes the superseded experiment, not current behavior.
+>
 > Superseded by `2026-09-05-durable-click-routing.md`: focus now runs as a
 > route-aware one-shot helper after protocol dispatch, including history clicks.
 

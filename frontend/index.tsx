@@ -319,8 +319,8 @@ export default definePlugin(() => {
 	installHook();
 	startDevFirePoll();
 	startClickBridge();
-	// Windows returns the durable envelope through steam://snn/click/<payload>.
-	// Linux returns the same envelope through the click file.
+	// Linux and Windows return the durable envelope through the canonical
+	// steam://steam-native-notify/notification/<payload> URL.
 	const steamUrl = registerSteamUrlClicks();
 
 	return {

@@ -10,9 +10,9 @@ before non-trivial work. `docs/steam-routing.md` is the analysis of Steam's
 own click handling; `docs/notification-types.md` maps type numbers to names;
 `docs/regeneration.md` records the catalog/schema restoration procedure;
 `docs/platforms.md` is the platform support matrix (Linux native shipped;
-Flatpak paths ready, host unsupported; Windows delivery shipped and validated
-on one Windows 11 VM but EXPERIMENTAL; macOS refuses to deliver,
-loudly) and the delivery plan for each.
+Flatpak paths ready, host unsupported; Windows delivery shipped but the new
+activation URL still awaits VM revalidation; macOS refuses to deliver, loudly)
+and the delivery plan for each.
 
 ## State
 
@@ -26,9 +26,16 @@ current focus. Ambiguity and uncataloged types fail closed.
 
 The replay stash retains the latest 256 chosen closures for the Steam session,
 with no time expiry. Heap measurements found current handlers under 0.5KB each
-and no detached documents. Durable data is stored in the OS notification's
-activation URI, not in the heap or on plugin disk. Windows history clicks can
-therefore route after a Steam restart; exact replay cannot.
+and no detached documents. The closures stay in RAM and disappear when Steam
+restarts. Durable data is encoded in
+`steam://steam-native-notify/notification/<base64url-envelope>`, not in the
+heap or on plugin disk.
+
+Linux launches that URL after a live `notify-send` default action. Quickshell
+also receives `omarchy-exec-argv` with a fixed `steam`, URL argv pair for
+Quattro history. Other FreeDesktop daemons do not promise a reboot-durable
+executable action. Windows stores the same URL in the WinRT toast. Linux and
+Windows runtime validation of this unified path remains pending.
 
 ## Commands
 
@@ -120,10 +127,12 @@ meaningless, and produced three wrong conclusions in this project.
 **Watch the client while clicking.** A `steam://nav/...` route changes a page
 inside the existing window; unwatched, a working navigation looks like nothing.
 
-**Clicks ride the session-long click bridge.** It drops click-file writes older
-than 30s; that is stale-file protection, not notification expiry. Every
-consumed click logs a `click-bridge:` line. No line means the OS action did not
-reach Steam or the frontend is not running.
+**Clicks return through Steam's registered notification URL.** The Linux live
+action launches it directly; Quattro can retain the fixed argv hint in history;
+Windows stores it as the WinRT protocol target. Every accepted click logs a
+`steam-url:` line followed by `click-bridge:` dispatch. No line means the OS
+action did not reach Steam or the frontend is not running. The remaining
+click-file poll is a legacy/test seam, not the Linux notification transport.
 
 **Never fire TestIncomingVoiceChat.** A fake incoming call has no caller to
 hang up: its notification never resolves, and once its toast has shown,
@@ -181,10 +190,9 @@ frontend/clickbridge.ts   replay on matching surface; live-focus fallback otherw
 frontend/devfire.ts       tools/fire door, gated by a setting
 frontend/Settings.tsx     settings panel; settings.ts, per-key config store
 backend/main.lua          marshaller + per-OS spawn seam (Millennium Lua host)
-tools/notify-action       escaping, delivery; a click writes .click (POSIX sh,
-                          packed as a .star asset, materialized to ~/.cache)
+tools/notify-action       POSIX delivery; live action launches canonical URL,
+                          Quickshell gets Quattro's fixed argv history hint
 tools/notify-action.ps1   Windows delivery: WinRT toast, protocol-activation
                           click + one-shot route-aware focus (EXPERIMENTAL)
-tools/click-handler.js    the snn: URI handler: validate, write .click
-                          (wscript //B, registered by the ps1's -Setup)
+frontend/steamurl.ts      register and validate the canonical Steam URL
 ```

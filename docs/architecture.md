@@ -29,9 +29,11 @@ Steam renders a toast (its own CEF popup window)
   frontend/choose.ts      which handler a click may run (pure, offline-tested)
   frontend/click.ts       make the versioned token/surface/fallback envelope
   backend/main.lua        marshal the payload to the helper
-  tools/notify-action     escape, resolve artwork, deliver; a click returns
-                          <epoch>|click:<base64url-envelope>
-  frontend/clickbridge.ts consume all clicks for the Steam session
+  tools/notify-action     Linux: live action launches the canonical Steam URL;
+                          Quickshell also gets a fixed argv history hint
+  tools/notify-action.ps1 Windows: store the same URL in the WinRT toast
+  frontend/steamurl.ts    validate the URL and enter the shared dispatcher
+  frontend/clickbridge.ts select replay or fallback for the live surface
        same surface       invoke the exact handler by random token
        changed/restarted  dispatch the durable route against live focus
   backend/main.lua        Windows only: request one route-aware focus pulse
@@ -78,22 +80,36 @@ candidates), BFS downward collecting every function-valued
   whose click does nothing. A wrong invoke ACTS (a voice-chat accept answers
   the call), so there is no fallback and never should be.
 
-A clickable notification carries `click:<base64url JSON>`. The version-1
+A clickable notification crosses the five-position RPC as
+`click:<base64url JSON>`. The helpers expose the same envelope to the OS as
+`steam://steam-native-notify/notification/<base64url-envelope>`. The version-1
 envelope contains a cryptographically random 128-bit replay token, capture
 surface appid (`0` for desktop), verified catalog fallback or `null`, and the
 Windows focus target (`main` or `chat`). It contains no notification text or
 artwork.
 
-The bridge polls for the whole Steam session. It rejects malformed envelopes
-and click-file writes older than 30 seconds. On a matching live surface it
-tries exact replay first. On a surface mismatch, missing stash entry, replay
-throw, or post-restart protocol activation, it uses the catalog fallback. A
-toast with neither a proved handler nor a verified fallback is inert.
+`frontend/steamurl.ts` registers the `steam-native-notify` URL section for the
+whole Steam session and rejects malformed paths and envelopes. On a matching
+live surface the dispatcher tries exact replay first. On a surface mismatch,
+missing stash entry, replay throw, or post-restart activation, it uses the
+catalog fallback. A toast with neither a proved handler nor a verified fallback
+is inert. The session-long click-file poll remains only as a legacy/test input;
+its 30-second age check does not limit URL activation.
 
 The replay stash holds the latest 256 chosen closures for the Steam session;
 it has no time expiry. The cap is a memory bound, not a click-lifetime policy.
-The durable data lives in the OS notification's activation URI, so cataloged
-clicks survive a Steam restart without persisting a closure or a plugin file.
+The closures stay in CEF RAM and disappear at restart. The fallback data lives
+in the notification URL, so an OS-retained actionable notification can route
+without persisting a closure or a plugin route file.
+
+On Linux, a live FreeDesktop default action makes the detached helper run
+`steam <canonical-url>` with the URL as one argv element. The helper requests a
+30-second timeout. When the daemon identifies itself as Quickshell, the helper
+also sends `omarchy-exec-argv` containing the fixed `steam`, URL pair; Quattro
+can store that vector in its history. Arbitrary FreeDesktop daemons standardize
+the action identifier returned to the sender, not a persistent executable
+command, so reboot-durable history clicks are daemon-specific. The new Linux
+path has offline coverage but still awaits live validation.
 
 ### Log vocabulary
 
@@ -116,7 +132,9 @@ appends there too when it refuses a platform:
 | `click-bridge: replay token=<prefix>` | matching-surface exact replay ran |
 | `click-bridge: fallback <route>` | live-focus catalog dispatch ran |
 | `click-bridge: no verified fallback token=<prefix>` | replay was unavailable and no safe route exists |
-| `click-bridge: stale click dropped (Ns old)` | consumed but older than 30s; dropped by design |
+| `steam-url: registered steam://steam-native-notify/notification/<payload>` | the canonical activation handler attached |
+| `steam-url: click token=<prefix>` | the OS activation URL decoded and entered dispatch |
+| `click-bridge: stale click dropped (Ns old)` | a legacy/test click-file input was older than 30s |
 | `replay: invoke <name> onClick@D age=Ns` then `-> returned without throwing` | the click ran |
 | `replay: invoke ... -> no stash entry / THREW ...` | why exact replay did not run |
 | `focus: raised kind=<main\|chat> ... target=...` | Windows pulsed the selected Steam window after dispatch |
@@ -134,19 +152,16 @@ action.
   invoking and uses the durable catalog against current focus when it differs.
   Types without a verified catalog route still fail closed after a surface
   change or Steam restart.
-- Windows focus is a reversible topmost pulse after every live or history
-  protocol click. It selects the chat window for friend/chat routes and the
-  main window otherwise. Windows can leave `ShellExperienceHost` as keyboard
-  focus owner; this guarantees visibility above ordinary windows, not keyboard
-  focus or precedence over an exclusive-fullscreen/topmost game. Real
-  FriendOnline and Achievement history rows have worked after a full Steam
-  restart; the friend route raised its named chat through the durable catalog
-  fallback. An Achievement history click also launched a fully stopped Steam
-  client and completed its persisted navigation after startup.
-- The desktop popup is the whole click window: quickshell 1.2 expires it
-  after ~8s despite `-t 0` and the action dies with it (the
-  notification-centre copy is inert). Orthogonal to the plugin, but it
-  bounds how a click can be tested or used here.
+- Windows focus is a reversible topmost pulse after a dispatched desktop click.
+  It selects the chat window for friend/chat routes and the main window
+  otherwise. The pre-unification Windows path showed that
+  `ShellExperienceHost` can remain keyboard focus owner and that history rows
+  can route after Steam restarts. The canonical URL change still needs the
+  Windows VM pass before those results apply to the current artifact.
+- Linux's standard action is live only while the daemon retains it and the
+  waiting helper remains its action client. Quattro receives a fixed argv hint
+  intended for actionable history. Other FreeDesktop histories may retain a
+  row without retaining an executable action, including across a reboot.
 - Steam updates can move the fiber conventions (`__reactFiber` keys,
   `memoizedProps`, HostPortal tag 4) or stop drilling the handler object;
   each failure names its layer in the `replay: candidates` line.
@@ -176,9 +191,10 @@ action.
   in-process image-data that history rows lose. Every delivery also names
   `steam.desktop` in a `desktop-entry` hint for app identity (name, logo
   badge, per-app grouping on daemons that read it).
-- Notification actions must be named `default` to fire on a body click, and
-  only while the popup is live, hence `-t 0`. The daemon does not auto-fire
-  actions on expiry, so a logged click is a genuine click.
+- FreeDesktop body actions must be named `default`. The Linux helper requests a
+  30-second timeout and launches the canonical URL only after `notify-send`
+  returns that action. Quickshell additionally receives Quattro's fixed argv
+  history hint. Expiry does not synthesize an action.
 - Frontend-backend RPC rides Millennium's `ffi` bridge with positional
   arguments (`Notify(title, body, image, route, ingame)`); the retired
   `callable` transport could not order a multi-key object. A Lua string return

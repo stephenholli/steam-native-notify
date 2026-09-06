@@ -15,13 +15,12 @@ import { dispatchClick } from './clickbridge';
  *
  * `RegisterForRunSteamURL` takes any section name (Millennium registers
  * `millennium` the same way), so a toast carries a versioned envelope
- * in `steam://steam-native-notify/notification/<base64url>`. Windows keeps that URI with notification
- * history, so its verified catalog fallback survives a Steam restart.
+ * in `steam://steam-native-notify/notification/<base64url>`. Windows stores
+ * that URI in the toast; Linux launches it after a live default action.
  *
- * Linux keeps the click file: notify-send hands the click back to a helper
- * this plugin owns, which needs no round trip through Steam. Registering
- * here is additive on every platform -- a second door to the same stash,
- * never a replacement for the bridge.
+ * Quickshell also receives the fixed `steam`, URL argv pair that Quattro can
+ * keep with notification history. Both platforms therefore enter the same
+ * validated dispatcher without persisting a JavaScript closure.
  */
 interface Unregisterable {
 	unregister(): void;
@@ -33,7 +32,7 @@ interface SteamUrlApi {
 
 /**
  * Never throws: a failed registration must leave delivery untouched, and an
- * older client without the API simply has no Windows click path.
+ * older client without the API simply has no notification click path.
  */
 export function registerSteamUrlClicks(): Unregisterable | null {
 	try {

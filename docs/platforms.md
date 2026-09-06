@@ -5,17 +5,18 @@ where the plugin stands on each, what already branches per platform in the
 code, and the plan for the platforms that do not deliver yet. Written to be
 pasted into tracking issues. Every platform-specific claim carries a source
 and a status: **verified** against a primary source (its own docs or code),
-or **unverified**. Linux has run natively and Windows in a Windows 11 VM;
+or **unverified**. Earlier Linux and Windows activation paths ran natively and
+in a Windows 11 VM. The unified URL path still awaits those runtime passes;
 macOS has not run.
 
 ## Matrix
 
 | platform | status | delivery | click |
 |---|---|---|---|
-| Linux, native Steam | **shipped** | `notify-send` to the FreeDesktop daemon | `default` action, `.click` file, bridge |
-| Linux, Flatpak Steam | paths ready; the host is unsupported by Millennium | same helper; inside the sandbox libnotify routes through the notification portal (plan) | same file contract; portal semantics unverified |
+| Linux, native Steam | **shipped**; unified activation source/offline-tested, live pass pending | `notify-send` to the FreeDesktop daemon | live `default` action launches the canonical Steam URL; Quickshell also gets Quattro's fixed argv history hint |
+| Linux, Flatpak Steam | paths ready; the host is unsupported by Millennium | same helper; inside the sandbox libnotify routes through the notification portal (plan) | canonical URL; portal action semantics unverified |
 | macOS | backend paths ready; delivery refused, loudly | terminal-notifier `-execute` (plan) | `-execute` writes `.click` (plan) |
-| Windows | **shipped and validated in a Win11 VM**, EXPERIMENTAL | WinRT toast via notify-action.ps1 (Windows PowerShell 5.1, no vendored binary): branding, artwork, re-encode | `steam://snn/click/<envelope>`; exact replay or durable live-focus fallback, then one-shot route-aware focus |
+| Windows | **shipped**, EXPERIMENTAL; unified activation source-reviewed, VM pass pending | WinRT toast via notify-action.ps1 (Windows PowerShell 5.1, no vendored binary): branding, artwork, re-encode | canonical notification URL; exact replay or durable live-focus fallback, then one-shot route-aware focus |
 
 Refused (macOS today) means: the backend loads, logs `desktop delivery is
 not implemented on <platform>` at load and `unsupported platform: <platform>
@@ -51,8 +52,8 @@ slots (`title body image route ingame`) are the contract on every platform.
 Files in the runtime directory: `plugin.log` (truncated at each backend
 load; the helper appends its refusals there), the materialized helper
 (`notify-action` on Linux; `notify-action.ps1` on Windows), `steam-dir` (one line: Millennium's `steam_path()` answer,
-rewritten at each load, removed when there is no answer), `.click` and
-`.dev-fire` (consume-once handoffs), `icons/` (the helper's avatar cache),
+rewritten at each load, removed when there is no answer), `.dev-fire` and the
+legacy/test-only `.click` input (consume-once handoffs), `icons/` (the helper's avatar cache),
 and on Windows `<id>.notify` payload files (helper-consumed), `steam.ico`
 (the extracted branding icon) and `.wpn-backoff` (the platform-wedge
 back-off stamp). `tools/test-backend` loads the backend under Linux,
@@ -140,16 +141,29 @@ resolves through `~/.steam/steam/appcache/librarycache/...` (Millennium's
 answer) rather than `~/.local/share/Steam/appcache/librarycache/...`. Same
 file, and the daemon copies it or reads it in place either way.
 
-Durable routing regression-tested on native Linux, 2026-09-05:
+The pre-unification click-file path was regression-tested on native Linux,
+2026-09-05:
 
 - current packed bundle, hook, identity, and URL templates after a full restart
 - live FriendOnline and Achievement banner clicks through exact handler replay
 - TradeOffer through Steam's server-notification ingestion and catalog decode
 - synthetic post-restart `.click` envelope through the catalog fallback
 
-Quickshell's stored notification row retains Steam's app identity but not the
-live `notify-send` action. Clicking that row can focus Steam, but cannot route;
-the live banner remains the Linux click surface.
+The current helper converts a validated `click:<base64url-envelope>` route to
+`steam://steam-native-notify/notification/<base64url-envelope>`. A live
+`notify-send` default action launches `steam` with that URL as one argv element;
+no Linux notification click writes `.click`. The helper requests a 30-second
+timeout and stays detached, so restarting Steam does not remove a still-live
+action.
+
+When `GetServerInformation` names Quickshell, the helper adds
+`omarchy-exec-argv:["steam","<canonical-url>"]`. Quattro stores that fixed argv
+vector with its history record. Other daemons receive only the standard
+FreeDesktop action. That standard returns an action identifier to the waiting
+client but does not define a persistent executable command, so arbitrary-daemon
+history and reboot durability remain best effort. The argv has no shell
+evaluation. These claims are implemented and offline-tested; Task 6 owns live
+banner, Quattro history, Steam restart, and shell restart validation.
 
 ## Linux, Flatpak Steam: paths ready, host unsupported
 
@@ -216,8 +230,8 @@ JPEG or SVG, or (deprecated) bytes. **Verified:**
 What that changes, all **unverified** until run:
 
 - `-A default=Open` should map onto the portal's default action and
-  `notify-send` should still print `default` on activation; the click
-  contract (`<epoch>|<payload>` into `.click`) is unchanged if so
+  `notify-send` should still print `default` on activation; the helper should
+  then launch the canonical Steam URL as it does outside the sandbox
 - the `image-path` hint (a `file://` path) is not a portal concept; the
   portal wants the icon serialized, and a sandbox path means nothing to the
   host. libnotify 0.8.x "Improve reading images when inside a portal" (same
@@ -431,11 +445,13 @@ Three to four days with a Mac. Without one, only the first row.
 - Does `-execute` fire for a body click on a banner, or only from
   Notification Center? (The README says "when the notification is clicked".)
 
-## Windows: shipped and validated in a Windows 11 VM, EXPERIMENTAL
+## Windows: shipped, unified activation pending VM revalidation
 
-Every piece below has run in one dockur/windows Win11 Pro VM with Millennium
-3.5.0-beta.2 and Steam. The narrow hardware coverage keeps the label
-experimental.
+The delivery, replay, fallback, history, cold-start, and focus mechanisms ran
+in one dockur/windows Win11 Pro VM with Millennium 3.5.0-beta.2 and Steam before
+the URL namespace changed. The canonical URL is source-reviewed but has not run
+in that VM. Task 7 owns the current runtime pass. The narrow hardware coverage
+keeps the platform experimental either way.
 
 ### Shape
 
@@ -449,8 +465,10 @@ experimental.
           exit immediately
 
     banner or Notification Center click
-      Windows launches steam://snn/click/<base64url-envelope>
-      Steam dispatches the registered snn section to frontend/steamurl.ts
+      Windows launches
+        steam://steam-native-notify/notification/<base64url-envelope>
+      Steam dispatches the registered steam-native-notify section
+        to frontend/steamurl.ts
       clickbridge.ts validates and routes:
         matching surface + live stash -> exact handler replay
         mismatch/restart/failure       -> verified catalog fallback
@@ -458,9 +476,12 @@ experimental.
       helper pulses the selected window topmost, restores z-order, exits
 
 The envelope contains a random replay token, capture appid, verified fallback,
-and focus kind. It contains no notification content. Windows persists the
-protocol URI with notification history, so a cataloged click can route after
-Steam restarts even though the exact handler stash is RAM-only.
+and focus kind. It contains no notification content. The exact handler stash is
+RAM-only, capped at 256, has no time expiry, and disappears with Steam. The
+WinRT XML stores the complete fallback data in the protocol URL. Prior VM runs
+showed that Windows retained the old protocol target in notification history;
+Task 7 must confirm the canonical target has the same live, history, restart,
+and cold-start behavior.
 
 No process waits for activation. The old 120-second helper retained about
 32.8MB private memory per notification; the current one-shot focus helper only
@@ -479,12 +500,11 @@ Windows PowerShell 5.1 is required for WinRT projection; `pwsh` cannot provide
 it. LuaJIT ffi is required for console-free `CreateProcessW`; without ffi the
 backend logs the unsupported delivery and leaves Steam's toast intact.
 
-### Validation results
+### Pre-unification validation results
 
 - delivery: branded Steam toast, friend avatar, library art, achievement art,
   UTF-8, and no console flash
-- protocol: durable `steam://snn/click/<payload>` activation registered in the
-  running frontend
+- protocol: the former Steam URL activation reached the running frontend
 - exact replay: FriendOnline and Achievement banner clicks invoked the chosen
   Steam handler
 - route-aware focus: FriendOnline selected the named friend chat window;
@@ -499,6 +519,11 @@ backend logs the unsupported delivery and leaves Steam's toast intact.
 - z-order: selected Steam window raised above an ordinary window and restored
   normal z-order
 
+The current source stores
+`steam://steam-native-notify/notification/<base64url-envelope>` in the WinRT
+launch attribute and registers `steam-native-notify` in the frontend. No current
+Windows runtime result exists yet.
+
 Windows can still report `ShellExperienceHost` as the foreground owner after a
 toast click. The pulse is a visibility guarantee above ordinary windows, not a
 keyboard-focus guarantee. A topmost or exclusive-fullscreen game remains
@@ -512,7 +537,8 @@ in the VM. See Microsoft's
 
 Protocol activation is the documented path for unpackaged toast senders and
 works from both banners and Notification Center without an activator. Steam
-already owns `steam:` and forwards the `snn` section to the client JS.
+already owns `steam:` and forwards the registered `steam-native-notify` section
+to the client JS.
 
 An earlier private `snn:` scheme never launched from a Windows toast despite
 working through `ShellExecute`. HKCU/HKLM registration, capability association,

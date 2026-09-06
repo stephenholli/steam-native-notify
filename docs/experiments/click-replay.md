@@ -11,6 +11,14 @@ surface, verified catalog fallback, and focus target in a versioned envelope.
 The bridge replays on the same surface and dispatches the catalog against live
 focus otherwise. Missing stashes after a Steam restart take the same fallback.
 
+Current Linux and Windows delivery encode that envelope in
+`steam://steam-native-notify/notification/<base64url-envelope>`. Linux launches
+the URL after a live default action and gives Quickshell a fixed `steam`, URL
+argv hint for Quattro history. Windows stores it as the WinRT protocol target.
+The closures remain RAM-only. An arbitrary FreeDesktop daemon does not promise
+to persist the executable action across reboot. These unified paths await their
+Linux and Windows runtime passes.
+
 The 120-second limit was transport policy, not a measured memory boundary.
 Forced-GC measurements on live captures found:
 
@@ -26,6 +34,8 @@ waiter. At the measured upper sample, 256 closures project to roughly 121KB;
 the bound remains defensive because future Steam handlers can capture more.
 Durable routing data is serialized into the OS notification activation URI;
 the closures remain RAM-only and disappear at Steam restart.
+
+## Historical experiment record
 
 ## Results (2026-08-29, run live on Steam + Helldivers 2)
 

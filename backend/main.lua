@@ -489,10 +489,10 @@ function TakeDevCommand()
     return consume(join(RUNTIME_DIR, ".dev-fire"))
 end
 
---- Click handoff: notify-action writes every clicked route (or action token)
---- to RUNTIME_DIR/.click instead of invoking a steam:// URL (which would
---- raise the desktop client over a focused game); the frontend's click
---- bridge polls this and opens it on the surface live focus picks.
+--- Legacy/test click handoff: production helpers launch or store the canonical
+--- Steam notification URL, which frontend/steamurl.ts validates before shared
+--- dispatch. This consume-once input remains for compatibility and focused
+--- tests; live focus still selects the dispatch surface.
 ---@ffi
 ---@return string
 function TakeClick()

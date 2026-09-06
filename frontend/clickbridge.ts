@@ -19,18 +19,21 @@ import {
 /**
  * The click bridge: every notification click is delivered through here.
  *
- * tools/notify-action writes a versioned click envelope to a click file. This
- * end prefers exact handler replay while the capture surface still matches,
- * then falls back to the restored catalog against the live click surface.
+ * Production helpers expose the versioned envelope through the canonical Steam
+ * URL, which frontend/steamurl.ts sends to dispatchClick. The retained
+ * timestamped click-file input is a legacy/test seam. Both entries prefer exact
+ * handler replay while the capture surface still matches, then fall back to the
+ * restored catalog against the live click surface.
  */
 const takeClick = ffi<[], string>('TakeClick');
 const focusSteam = ffi<[string], string>('FocusSteam');
 
 const CLICK_POLL_MS = 1000;
 /**
- * notify-action stamps each click with its write time (<epoch-seconds>|
+ * A legacy/test writer stamps each click with its write time (<epoch-seconds>|
  * <payload>). The session-long poll may observe an abandoned write after a
- * delay, so old writes are dropped instead of opened as a surprise.
+ * delay, so old writes are dropped instead of opened as a surprise. Canonical
+ * URL activation does not use this age limit.
  */
 const CLICK_MAX_AGE_S = 30;
 
