@@ -350,7 +350,7 @@ if ($FocusKind) {
 # the envelope.
 # No route means the toast is deliberately inert, mirroring Steam's own.
 $ToastAttrs = ''
-if ($Route -match '^click:([A-Za-z0-9_-]+)$') {
+if ($Route -cmatch '\Aclick:([A-Za-z0-9_-]{1,8192})\z') {
     $ToastAttrs = " activationType=`"protocol`" launch=`"steam://steam-native-notify/notification/$($Matches[1])`""
 }
 $ImageXml = ''
