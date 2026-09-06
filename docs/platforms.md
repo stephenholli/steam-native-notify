@@ -7,14 +7,15 @@ pasted into tracking issues. Every platform-specific claim carries a source
 and a status: **verified** against a primary source (its own docs or code),
 or **unverified**. Earlier Linux and Windows activation paths ran natively and
 in a Windows 11 VM. The unified URL path ran on native Linux and in the Windows
-VM; Windows UI clicks, visual focus, and a clean guest reboot remain untested,
-and macOS has not run.
+VM; Quattro history clicks worked with Linux Steam running and fully stopped.
+Windows UI clicks, visual focus, and a clean guest reboot remain untested, and
+macOS has not run.
 
 ## Matrix
 
 | platform | status | delivery | click |
 |---|---|---|---|
-| Linux, native Steam | **shipped**; stored-argv replay and Achievement restart/cold-start fallback observed; UI clicks and visual focus untested | `notify-send` to the FreeDesktop daemon | live `default` action launches the canonical Steam URL; Quickshell persists the fixed argv for exact replay or durable fallback |
+| Linux, native Steam | **shipped**; Quattro history clicks observed with Steam running and fully stopped; live-banner and in-game clicks untested | `notify-send` to the FreeDesktop daemon | live `default` action launches the canonical Steam URL; Quickshell persists the fixed argv for exact replay or durable fallback |
 | Linux, Flatpak Steam | paths ready; the host is unsupported by Millennium | same helper; inside the sandbox libnotify routes through the notification portal (plan) | canonical URL; portal action semantics unverified |
 | macOS | backend paths ready; delivery refused, loudly | terminal-notifier `-execute` (plan) | `-execute` writes `.click` (plan) |
 | Windows | **shipped**, EXPERIMENTAL; canonical history, FriendOnline/Achievement exact replay, and Achievement restart/cold-start fallback observed; UI clicks and visual focus untested | WinRT toast via notify-action.ps1 (Windows PowerShell 5.1, no vendored binary): branding, artwork, re-encode | canonical notification URL; exact replay or durable live-focus fallback, then one-shot route-aware focus |
@@ -182,12 +183,14 @@ The unified URL path ran on native Linux with Quickshell 1.2, 2026-09-05:
 - executed the same persisted Achievement vector with Steam fully stopped;
   Steam started, registered the URL section, accepted the queued activation,
   and dispatched the catalog fallback six seconds after invocation
+- user-verified Quattro history clicks through the UI with Steam running and
+  fully stopped, 2026-09-06; both opened their intended Steam destination
 
-Still pending: clicking the live banner and Quattro history card through the
-UI, visual navigation and focus confirmation, a shell/login restart, a host
-reboot, arbitrary FreeDesktop daemons, and real in-game focus changes. The
-measured run executed Quattro's persisted argv directly and did not synthesize
-mouse input.
+Still pending: clicking the live banner through the UI, explicit focus-owner
+measurement, a shell/login restart, a host reboot, arbitrary FreeDesktop
+daemons, and real in-game focus changes. The instrumented run executed
+Quattro's persisted argv directly and did not synthesize mouse input; the later
+history checks used the UI.
 
 ## Linux, Flatpak Steam: paths ready, host unsupported
 

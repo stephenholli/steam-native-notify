@@ -117,8 +117,10 @@ can store that vector in its history. Arbitrary FreeDesktop daemons standardize
 the action identifier returned to the sender, not a persistent executable
 command, so reboot-durable history clicks are daemon-specific. The new Linux
 path has offline coverage and runtime evidence for stored-argv replay and
-Achievement fallback after Steam restart/cold start. UI clicks, visual focus,
-and shell/login restart remain untested; see `docs/platforms.md`.
+Achievement fallback after Steam restart/cold start. Quattro history UI clicks
+worked with Steam running and fully stopped; live-banner clicks, explicit
+focus-owner measurement, and shell/login restart remain untested. See
+`docs/platforms.md`.
 
 ### Log vocabulary
 
