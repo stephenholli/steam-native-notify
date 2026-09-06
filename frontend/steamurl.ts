@@ -1,5 +1,5 @@
 import { dlog } from './log';
-import { clickEnvelopeFromSteamUrl } from './click';
+import { clickEnvelopeFromSteamUrl, STEAM_URL_RESOURCE, STEAM_URL_SECTION } from './click';
 import { dispatchClick } from './clickbridge';
 
 /**
@@ -23,9 +23,6 @@ import { dispatchClick } from './clickbridge';
  * here is additive on every platform -- a second door to the same stash,
  * never a replacement for the bridge.
  */
-export const STEAM_URL_SECTION = 'steam-native-notify';
-export const STEAM_URL_RESOURCE = 'notification';
-
 interface Unregisterable {
 	unregister(): void;
 }
