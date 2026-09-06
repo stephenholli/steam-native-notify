@@ -68,11 +68,18 @@ tools/fire --replay invoke    # invoke the latest stashed handler (no click)
 tools/notify-action --resolve-icon <url>
 ```
 
+The three dev tools are bun scripts (`#!/usr/bin/env bun`, no extension) and
+run on every platform from the same files; on Windows prefix them with
+`bun` (`bun tools/fire TestFriendOnline`). Their shared paths and the log
+prefix contract live in `tools/lib/snn.ts`; `bun test tools/devtools.test.ts`
+pins the argument grammar, the msgpack framing and the toast-XML reader.
+
 Install: `bun install`, then `bun run build`; starlight packs the plugin into
 `~/.local/share/millennium/plugins/me.tysmith.steam-native-notifications.star`
 (building IS installing). Enable under Millennium > Plugins.
 
-Plugin log: `~/.cache/steam-native-notifications/plugin.log`, truncated at each
+Plugin log: `~/.cache/steam-native-notifications/plugin.log` (Windows:
+`%LOCALAPPDATA%\steam-native-notifications\plugin.log`), truncated at each
 backend load (Millennium buffers a packed plugin's logger output away from
 Steam's console log, so the backend mirrors it there). Millennium's own
 loader lines are still in `~/.steam/steam/logs/console-linux.txt`, filtered
