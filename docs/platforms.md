@@ -46,7 +46,7 @@ slots (`title body image route ingame`) are the contract on every platform.
 | helper | `tools/notify-action` (POSIX sh, notify-send) | same, through the portal | Darwin branch of the same sh, terminal-notifier (plan) | `tools/notify-action.ps1` (WinRT toast), no vendored binary |
 | desktop entry / app identity | `steam` | `com.valvesoftware.Steam` | the sending bundle's identity | registry-only AUMID under HKCU, icon extracted from the user's steam.exe |
 | log | `<runtime>/plugin.log`; Millennium's loader lines in `~/.steam/steam/logs/console-linux.txt` | `<runtime>/plugin.log` in the per-app cache | `<runtime>/plugin.log` | `<runtime>\plugin.log` |
-| dev tools | `tools/fire`, `tools/capture`, `tools/mep` | need a `--flatpak` path switch (plan) | need the macOS paths (plan) | `fire.ps1`, `capture.ps1` (plan) |
+| dev tools | `tools/fire`, `tools/capture`, `tools/mep` | need a `--flatpak` path switch (plan) | need the macOS paths (plan) | `fire.ps1`, `capture.ps1`, `mep.ps1` (PowerShell 7, same subcommands) |
 
 Files in the runtime directory: `plugin.log` (truncated at each backend
 load; the helper appends its refusals there), the materialized helper
@@ -616,8 +616,6 @@ setting reported dead on Windows 11.
 
 ### Remaining Windows work
 
-- `fire.ps1` / `capture.ps1` tester tooling (the dev loop writes `.dev-fire`
-  by hand today).
 - `scenario="urgent"` to break through Focus Assist, which suppresses toasts
   during fullscreen games by default.
 - `-Teardown` leaving no keys or icon behind (untested; low risk).

@@ -46,7 +46,10 @@ function Write-PluginLog([string]$Line) {
 }
 
 function Get-SteamDir {
-    # The backend publishes millennium.steam_path() here at every load.
+    # The backend publishes millennium.steam_path() here at every load. Its
+    # own copy on purpose: this file is materialized alone into the runtime
+    # dir and runs under Windows PowerShell 5.1, so tools/lib/snn.ps1 is
+    # neither on disk beside it nor something it could dot-source.
     $file = Join-Path $RuntimeDir 'steam-dir'
     if (Test-Path -LiteralPath $file) {
         $dir = (Get-Content -LiteralPath $file -First 1).Trim()

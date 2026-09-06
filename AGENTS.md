@@ -50,6 +50,8 @@ tools/fire --server 3 '{...}' # inject a server rollup through OnServerNotificat
 tools/mep --methods    # talk to Millennium's external protocol (dev only)
 tools/fire --replay inspect   # dump the stashed handler candidates
 tools/fire --replay invoke    # invoke the latest stashed handler (no click)
+tools/fire.ps1, tools/capture.ps1, tools/mep.ps1   # Windows twins (pwsh 7),
+                              # same subcommands
 tools/notify-action --resolve-icon <url>
 ```
 
