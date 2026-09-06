@@ -1,5 +1,8 @@
 import { dlog } from './log';
 import { invokeReplayHandler, raiseSteamWindow, REPLAY_CLICK_PREFIX } from './replay';
+import { replayNameFromSteamUrl } from './replayurl';
+
+export { replayNameFromSteamUrl };
 
 /**
  * The Windows click transport: Steam's own steam:// dispatch.
@@ -29,17 +32,6 @@ interface Unregisterable {
 
 interface SteamUrlApi {
 	RegisterForRunSteamURL(section: string, callback: (n: number, url: string) => void): Unregisterable;
-}
-
-/**
- * `steam://snn/replay/<toast-name>` -> the toast name, or null for anything
- * else. Steam passes the URL through verbatim, so this end validates it: the
- * only shape ever emitted is one replay token of the characters Steam's own
- * popup names use.
- */
-export function replayNameFromSteamUrl(url: string): string | null {
-	const match = /^steam:\/{1,2}snn\/replay\/([A-Za-z0-9_.-]+)\/?$/.exec(url.trim());
-	return match ? match[1] : null;
 }
 
 /**

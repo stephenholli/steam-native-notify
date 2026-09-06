@@ -469,19 +469,20 @@ beyond what the plugin does itself at load; 32-bit Windows.
                               Steam's JPEG art visible
           builds ToastGeneric appLogoOverride, hint-crop="circle" for
                               avatars; activationType="protocol"
-                              launch="snn:replay/<toast-name>" only when a
-                              route exists -- no route, no launch: the
-                              click only dismisses, mirroring Steam
+                              launch="steam://snn/replay/<toast-name>" only
+                              when a route exists -- no route, no launch:
+                              the click only dismisses, mirroring Steam
           Show(), exit        no waiting process, ever
 
-    a click (banner; Action Center too if persistence holds, see pass 7)
-      Windows ShellExecutes the snn: handler registered at setup:
-        wscript //B click-handler.js "snn:replay/<name>"
-          validates ^snn:replay/[A-Za-z0-9_.-]+$   the one security-
-                              sensitive line: the argument arrives through
-                              the shell, so anything else is dropped
-          writes <epoch>|replay:<name> -> .click.tmp -> .click
-      the in-Steam bridge consumes it exactly as on Linux
+    a click (banner, or the Notification Center where the toast persists)
+      Windows ShellExecutes the launch URL; steam.exe forwards it to the
+      running client, which hands it to the frontend's steam:// handler
+        frontend/steamurl.ts validates ^steam://snn/replay/[A-Za-z0-9_.-]+$
+                              the one security-sensitive line: Steam passes
+                              the URL through verbatim, so anything else is
+                              dropped
+          replays the stashed handler (frontend/replay.ts), as the click
+          bridge does on Linux
 
 Only `replay:` routes carry on Windows, which is not a loss: the bridge
 refuses every other shape on Linux too (`click-bridge: unbridgeable route`),
@@ -501,9 +502,7 @@ earlier.
   without a Start-menu shortcut. HKCU merges over HKLM in the classes view,
   so no elevation. This is the registration Microsoft's compat layer
   performs.
-- `HKCU\Software\Classes\snn`: `URL Protocol` plus `shell\open\command`
-  pointing wscript at the materialized click-handler.js.
-- `-Teardown` removes both keys and the icon; nothing else is left behind.
+- `-Teardown` removes the key and the icon; nothing else is left behind.
 
 ### Facts under the design (sourced by the adversarial review)
 
@@ -517,7 +516,7 @@ earlier.
 - Windows PowerShell 5.1, never pwsh: .NET 5+ removed WinRT projection
   (PlatformNotSupportedException). In-process add_Activated events on 5.1
   are folklore -- BurntToast gates them to pwsh 7.1+ -- which is why clicks
-  ride the URI scheme instead of a waiting process.
+  ride Steam's own steam:// dispatch instead of a waiting process.
 - The notification platform can wedge under bursts ("The notification
   platform is unavailable"; documented recovery is a service restart or a
   reboot). After one such failure the helper drops sends for 60 s, one log

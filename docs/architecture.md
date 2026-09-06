@@ -92,6 +92,7 @@ appends there too when it refuses a platform:
 | `from-toast <name> type=N source=...` | extraction worked; client payloads show the raw positional array |
 | `toast <name> -> {...}` | delivered; the JSON carries the replay token as `route` |
 | `toast <name> -> {...} (suppressed: ... notifications off)` | the surface toggle left this toast to Steam |
+| `toast <name> -> {...} (suppressed: overlay splash)` | Steam's per-launch overlay hint (type 33) stays inside Steam; its click is a no-op there too |
 | `replay: candidates <name> n=K stashed=onClick@D (twin\|sole)` | the walk found and proved a handler |
 | `replay: candidates ... n=0 (no fiber key ...)` | the `__reactFiber` convention moved |
 | `replay: candidates ... portal=miss` | the HostPortal boundary moved (walked the fallback root) |

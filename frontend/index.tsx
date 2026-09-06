@@ -171,13 +171,16 @@ function deliverToast(win: Window, name: string, text: string): void {
 	} catch (e) {
 		dlog(`from-toast ${name} failed: ${(e as Error)?.message ?? e}`);
 	}
+	// Steam's overlay splash ("Access Steam features from the overlay",
+	// EClientNotificationType 33) appears at every game launch; its own click
+	// is an explicit no-op (docs/notification-types.md) and on the desktop it
+	// is a card with no image and nothing to do, so it stays inside Steam.
+	const splash = type === 33;
 	// A suppressed toast is left entirely to Steam: nothing sent, popup not
 	// closed (hideSteamToast included). Capture and the logs above still run.
-	const suppressed = overlayCtx ? !settings().notifyInGame : !settings().notifyOutsideGame;
-	dlog(
-		`toast ${name} -> ${safeJson({ title, body, image, type, route })}` +
-			(suppressed ? ` (suppressed: ${overlayCtx ? 'in-game' : 'desktop'} notifications off)` : ''),
-	);
+	const suppressed = splash || (overlayCtx ? !settings().notifyInGame : !settings().notifyOutsideGame);
+	const why = splash ? 'overlay splash' : `${overlayCtx ? 'in-game' : 'desktop'} notifications off`;
+	dlog(`toast ${name} -> ${safeJson({ title, body, image, type, route })}` + (suppressed ? ` (suppressed: ${why})` : ''));
 	// The backend/notify-action contract is unchanged (five positional args);
 	// the replay token travels in the route slot and comes back through the
 	// click file verbatim, so neither end needed to learn about replay.

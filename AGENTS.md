@@ -186,8 +186,8 @@ frontend/SettingsPanel.tsx settings panel; settings.ts, per-key config store
 backend/main.lua          marshaller + per-OS spawn seam (Millennium Lua host)
 tools/notify-action       escaping, delivery; a click writes .click (POSIX sh,
                           packed as a .star asset, materialized to ~/.cache)
-tools/notify-action.ps1   Windows delivery: WinRT toast, protocol-activation
-                          click (EXPERIMENTAL, unvalidated on real hardware)
-tools/click-handler.js    the snn: URI handler: validate, write .click
-                          (wscript //B, registered by the ps1's -Setup)
+tools/notify-action.ps1   Windows delivery: WinRT toast whose click is a
+                          steam://snn/replay/<toast> URL Steam dispatches to
+                          frontend/steamurl.ts (EXPERIMENTAL, validated on
+                          Windows 11)
 ```

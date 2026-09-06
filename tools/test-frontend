@@ -14,8 +14,8 @@ import { fileURLToPath } from 'node:url';
 
 import { loadFrontendModules } from './load-frontend.mjs';
 
-const mods = loadFrontendModules(['notification', 'choose']);
-const { notification, choose } = mods;
+const mods = loadFrontendModules(['notification', 'choose', 'replayurl']);
+const { notification, choose, replayurl } = mods;
 
 let failures = 0;
 function check(what, ok, detail) {
@@ -37,7 +37,7 @@ function is(what, got, want) {
 // non-Millennium host (docs/architecture.md). Indirect imports like './log'
 // are fine; only a direct 'millennium' import breaks the boundary.
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-for (const name of ['choose', 'fiber', 'notification', 'replay']) {
+for (const name of ['choose', 'fiber', 'notification', 'replay', 'replayurl']) {
 	const source = readFileSync(join(root, 'frontend', `${name}.ts`), 'utf8');
 	check(`frontend/${name}.ts stays free of direct millennium imports`,
 		!/from\s+['"]millennium['"]|require\(\s*['"]millennium['"]\s*\)/.test(source),
@@ -49,13 +49,8 @@ for (const name of ['choose', 'fiber', 'notification', 'replay']) {
 // The Windows click transport: Steam dispatches steam://snn/replay/<toast> to
 // the client's JS (frontend/steamurl.ts). The parser is the trust boundary --
 // Steam passes the URL through verbatim, so only the one shape this plugin
-// emits may reach the replay stash. Parsed here by the same regex the module
-// uses; keep them in step.
-const REPLAY_URL = /^steam:\/{1,2}snn\/replay\/([A-Za-z0-9_.-]+)\/?$/;
-const replayName = (url) => {
-	const m = REPLAY_URL.exec(String(url).trim());
-	return m ? m[1] : null;
-};
+// emits may reach the replay stash. The module itself is under test.
+const replayName = (url) => replayurl.replayNameFromSteamUrl(String(url));
 check('steam-url: a replay URL yields the toast name',
 	replayName('steam://snn/replay/notificationtoasts_10001_desktop') === 'notificationtoasts_10001_desktop');
 check('steam-url: a single-slash URL is accepted (Steam normalizes both)',
