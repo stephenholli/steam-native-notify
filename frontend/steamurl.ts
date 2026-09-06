@@ -3,7 +3,7 @@ import { clickEnvelopeFromSteamUrl } from './click';
 import { dispatchClick } from './clickbridge';
 
 /**
- * The Windows click transport: Steam's own steam:// dispatch.
+ * The cross-platform click transport: Steam's own steam:// dispatch.
  *
  * A desktop notification cannot reach this plugin directly on Windows.
  * Measured on Windows 11 (docs/platforms.md): a toast activates
@@ -14,8 +14,8 @@ import { dispatchClick } from './clickbridge';
  * client's JS, where this plugin lives.
  *
  * `RegisterForRunSteamURL` takes any section name (Millennium registers
- * `millennium` the same way), so a Windows toast carries a versioned envelope
- * in `steam://snn/click/<base64url>`. Windows keeps that URI with notification
+ * `millennium` the same way), so a toast carries a versioned envelope
+ * in `steam://steam-native-notify/notification/<base64url>`. Windows keeps that URI with notification
  * history, so its verified catalog fallback survives a Steam restart.
  *
  * Linux keeps the click file: notify-send hands the click back to a helper
@@ -23,7 +23,8 @@ import { dispatchClick } from './clickbridge';
  * here is additive on every platform -- a second door to the same stash,
  * never a replacement for the bridge.
  */
-const URL_SECTION = 'snn';
+export const STEAM_URL_SECTION = 'steam-native-notify';
+export const STEAM_URL_RESOURCE = 'notification';
 
 interface Unregisterable {
 	unregister(): void;
@@ -44,7 +45,7 @@ export function registerSteamUrlClicks(): Unregisterable | null {
 			dlog('steam-url: RegisterForRunSteamURL unavailable; no steam:// click path');
 			return null;
 		}
-		const registration = api.RegisterForRunSteamURL(URL_SECTION, (_n: number, url: string) => {
+		const registration = api.RegisterForRunSteamURL(STEAM_URL_SECTION, (_n: number, url: string) => {
 			try {
 				const envelope = clickEnvelopeFromSteamUrl(String(url ?? ''));
 				if (!envelope) {
@@ -57,7 +58,7 @@ export function registerSteamUrlClicks(): Unregisterable | null {
 				dlog(`steam-url handler failed: ${(e as Error)?.message ?? e}`);
 			}
 		});
-		dlog(`steam-url: registered steam://${URL_SECTION}/click/<payload>`);
+		dlog(`steam-url: registered steam://${STEAM_URL_SECTION}/${STEAM_URL_RESOURCE}/<payload>`);
 		return registration;
 	} catch (e) {
 		dlog(`steam-url: registration failed: ${(e as Error)?.message ?? e}`);

@@ -75,10 +75,14 @@ if (click) {
 	const encoded = click.encodeClickEnvelope(envelope);
 	is('click envelope round trips', JSON.stringify(click.decodeClickEnvelope(encoded)), JSON.stringify(envelope));
 	is('click-file payload round trips', JSON.stringify(click.decodeClickPayload(`click:${encoded}`)), JSON.stringify(envelope));
-	is('Windows steam URL round trips',
-		JSON.stringify(click.clickEnvelopeFromSteamUrl(`steam://snn/click/${encoded}`)), JSON.stringify(envelope));
-	is('single-slash Windows URL round trips',
-		JSON.stringify(click.clickEnvelopeFromSteamUrl(`steam:/snn/click/${encoded}/`)), JSON.stringify(envelope));
+	is('canonical notification URL round trips',
+		JSON.stringify(click.clickEnvelopeFromSteamUrl(`steam://steam-native-notify/notification/${encoded}`)), JSON.stringify(envelope));
+	is('canonical single-slash URL round trips',
+		JSON.stringify(click.clickEnvelopeFromSteamUrl(`steam:/steam-native-notify/notification/${encoded}/`)), JSON.stringify(envelope));
+	is('canonical URL formats once',
+		click.steamNotificationUrl(encoded), `steam://steam-native-notify/notification/${encoded}`);
+	is('legacy snn URL is refused',
+		click.clickEnvelopeFromSteamUrl(`steam://snn/click/${encoded}`), null);
 
 	is('desktop toast captures appid 0', click.captureAppIdFromToastName('notificationtoasts_10000_desktop'), 0);
 	is('overlay toast captures its appid', click.captureAppIdFromToastName('notificationtoasts_uid570-10001'), 570);

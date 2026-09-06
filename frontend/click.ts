@@ -61,6 +61,11 @@ export function encodeClickEnvelope(value: unknown): string {
 	return bytesToBase64(bytes).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
+export function steamNotificationUrl(encoded: string): string {
+	if (!ENCODED.test(encoded) || encoded.length > 8192) return '';
+	return `steam://steam-native-notify/notification/${encoded}`;
+}
+
 export function decodeClickEnvelope(encoded: string): ClickEnvelope | null {
 	try {
 		if (typeof encoded !== 'string' || encoded.length === 0 || encoded.length > 8192 || !ENCODED.test(encoded)) {
@@ -79,7 +84,7 @@ export function decodeClickPayload(payload: string): ClickEnvelope | null {
 }
 
 export function clickEnvelopeFromSteamUrl(url: string): ClickEnvelope | null {
-	const match = /^steam:\/{1,2}snn\/click\/([A-Za-z0-9_-]+)\/?$/.exec(String(url).trim());
+	const match = /^steam:\/{1,2}steam-native-notify\/notification\/([A-Za-z0-9_-]+)\/?$/.exec(String(url).trim());
 	return match ? decodeClickEnvelope(match[1]) : null;
 }
 
