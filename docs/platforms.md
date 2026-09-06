@@ -422,10 +422,12 @@ Three to four days with a Mac. Without one, only the first row.
 
 ## Windows: shipped and validated on real hardware, EXPERIMENTAL
 
-Every piece below ships in the plugin, and none of it has run on a real
-Windows machine. The backend says so at load ("windows delivery is
-EXPERIMENTAL and unvalidated"), README carries the same warning, and the
-validation pass at the end is the gate out of the mark.
+Every piece below ships in the plugin and has run on two real Windows
+machines: a Windows 11 Pro VM (the validation pass at the end) and a
+64-bit Windows 11 workstation on the 64-bit Steam client (items 6 to 8 of
+the same pass). The backend still says EXPERIMENTAL at load ("windows delivery is
+EXPERIMENTAL and unvalidated") and README carries the same warning; the
+open item under "Remaining Windows work" is what keeps the mark.
 
 An earlier draft vendored SnoreToast behind a Start-menu shortcut. An
 adversarial review took that apart against primary sources: the shortcut
@@ -538,7 +540,35 @@ Run in a dockur/windows Win11 Pro VM, Millennium 3.5.0-beta.2, Steam client.
    an em dash arrived as mojibake; the helper now reads it `-Encoding UTF8`.
 4. Click -- **PASS.** A banner click replays Steam's own handler and lands
    where Steam would (an achievement toast opens that game's achievements).
-5. Focus -- **KNOWN LIMITATION**, below.
+5. Focus -- did not raise Steam's window in this VM pass; see item 8 and
+   "Focus", below.
+6. Do Not Disturb (64-bit workstation, desktop half) -- **PASS.** With
+   Do Not Disturb on from the Settings UI,
+   a fired toast was captured and delivered exactly as with it off (same
+   log lines, no `toast delivery failed`), Windows recorded the row with
+   the replay launch URL, and no banner painted; the toast waited in the
+   Notification Center. Suppression is Windows', and the plugin reports
+   no error for it. The registry value behind the toggle does not apply
+   live; only the UI toggle is a valid test.
+7. Real events, human-driven (64-bit workstation, no test methods) --
+   **PASS.** Eleven real download-complete toasts from installing owned
+   games, five clicked from the banner or the Notification Center, each
+   replay landing on the game's library page; a fresh Steam start then
+   one more. Three of the downloads completed after a game session and
+   toasted.
+   An achievement earned inside an exclusive-fullscreen game arrived as
+   an overlay-context toast (`notificationtoasts_uid<appid>-N_uid<pid>`),
+   was captured with its click handler and delivered; Windows' default
+   "when playing a game" Do Not Disturb rule held the banner, so it waited
+   in the Notification Center with the sound. Every game launch also
+   produced Steam's "Access Steam features from the overlay" hint toast
+   (type 33, no image, no useful target), which the plugin mirrors as-is;
+   filtering that type is worth considering.
+8. Focus (64-bit workstation) -- **PASS.** Every click, banner or
+   Notification Center, human or synthetic, brought Steam's window to the
+   foreground, including from minimized; a foreground probe records the
+   hand-off (shell notification window, `steam.exe`, then the client's
+   window) inside about 200 ms.
 
 ### How the click works, and why it is not a custom URI scheme
 
@@ -563,14 +593,23 @@ plugin already lives, so no custom scheme is needed. The `snn:` registration
 and its JScript handler are deleted; `-Setup` removes any an earlier build
 left behind.
 
-### The focus limitation
+### Focus
 
-A click updates Steam's window but does not bring it forward when Steam is
-already open behind other windows -- and does not foreground a cold-started
-Steam either. This is a Win32 rule, not a plugin gap, and no notification
-setting can change it.
+Measured on the 64-bit Windows 11 workstation (validation item 8): a click
+on the banner or on the Notification Center card brings Steam's window to
+the foreground, and restores it when it was minimized. A probe polling the
+foreground window through the click sees the shell's notification window,
+then the forwarding `steam.exe`, then the client's "Steam" window, within
+about 200 ms; human clicks and synthetic clicks behave the same. Nothing
+in the plugin does this: `raiseSteamWindow` only asks
+`steam://open/main` to create a window when there is none. The foreground
+hand-off happens between Windows, the `steam.exe` it activates and the
+resident client, which is the chain the reasoning below expected to fail.
+It did fail in the first validation pass, in a Windows 11 VM, and the
+reasoning is kept for that case; on a native install the click raises
+Steam.
 
-**Why.** Windows grants the right to call `SetForegroundWindow` to the
+**What the Win32 rules say.** Windows grants the right to call `SetForegroundWindow` to the
 process the shell activates, and it cannot be taken by anyone else -- Raymond
 Chen, [foreground activation permission is like love](https://devblogs.microsoft.com/oldnewthing/20090220-00/?p=19083):
 "You can't steal it, it has to be given to you." A toast click activates
@@ -618,5 +657,4 @@ setting reported dead on Windows 11.
 
 - `scenario="urgent"` to break through Focus Assist, which suppresses toasts
   during fullscreen games by default.
-- `-Teardown` leaving no keys or icon behind (untested; low risk).
-- Wider testing: one machine, one Windows build, one Steam client.
+- Wider testing: two machines, two Windows builds, two Steam clients.
