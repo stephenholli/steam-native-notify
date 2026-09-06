@@ -5,7 +5,7 @@ import { armClickBridge } from './clickbridge';
 import { startDevFirePoll } from './devfire';
 import { stashToastHandler } from './replay';
 import { registerSteamUrlClicks } from './steamurl';
-import { SettingsPanel } from './Settings';
+import { SettingsPanel } from './SettingsPanel';
 import { loadSettings, settings } from './settings';
 
 /**

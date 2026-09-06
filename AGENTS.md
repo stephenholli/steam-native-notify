@@ -180,7 +180,7 @@ frontend/fiber.ts         the __reactFiber discovery both walkers share
 frontend/log.ts           dlog/safeJson; prefixes are capture's contract
 frontend/clickbridge.ts   every click: .click file -> replay by toast name
 frontend/devfire.ts       tools/fire door, gated by a setting
-frontend/Settings.tsx     settings panel; settings.ts, per-key config store
+frontend/SettingsPanel.tsx settings panel; settings.ts, per-key config store
 backend/main.lua          marshaller + per-OS spawn seam (Millennium Lua host)
 tools/notify-action       escaping, delivery; a click writes .click (POSIX sh,
                           packed as a .star asset, materialized to ~/.cache)
