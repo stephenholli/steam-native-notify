@@ -273,21 +273,27 @@ fi
 # so no encoding satisfies every daemon. Cache names are sha1 hashes; only a
 # hostile $XDG_CACHE_HOME or $HOME could smuggle those characters in.
 #
-# set -- because POSIX sh has no arrays and a quoted string would word-split
-# on a path with spaces. The original positional parameters cease to exist
-# here: everything below must use the named vars.
-case $icon in
-/*) set -- -i "$FALLBACK_ICON" -h "string:image-path:file://$icon" ;;
-*) set -- -i "$icon" ;;
-esac
+# Rebuild argv for every attempt. The daemon can appear between retries, and a
+# recovered Quickshell must receive its durable activation hint on that send.
+send_notification() {
+	# set -- because POSIX sh has no arrays and a quoted string would
+	# word-split on a path with spaces.
+	case $icon in
+	/*) set -- -i "$FALLBACK_ICON" -h "string:image-path:file://$icon" ;;
+	*) set -- -i "$icon" ;;
+	esac
 
-if [ -n "$activation_url" ] && daemon_is_quickshell; then
-	set -- "$@" -h "string:omarchy-exec-argv:[\"steam\",\"$activation_url\"]"
-fi
-set -- "$@" -t "$EXPIRE"
-if [ -n "$activation_url" ]; then
-	set -- "$@" -A "$ACTION=Open"
-fi
+	if [ -n "$activation_url" ] && daemon_is_quickshell; then
+		set -- "$@" -h "string:omarchy-exec-argv:[\"steam\",\"$activation_url\"]"
+	fi
+	set -- "$@" -t "$EXPIRE"
+	if [ -n "$activation_url" ]; then
+		set -- "$@" -A "$ACTION=Open"
+	fi
+
+	notify-send -a "$APP_NAME" -h "string:desktop-entry:$DESKTOP_ENTRY" "$@" \
+		"$title" "$body" 2>/dev/null
+}
 
 # Blocks here. On a click the action name is printed; on dismissal, nothing is.
 #
@@ -297,8 +303,7 @@ fi
 # silently then, so retry for ~30s rather than lose the notification; a
 # machine with no daemon at all gives up quietly.
 tries=0
-until chosen=$(notify-send -a "$APP_NAME" -h "string:desktop-entry:$DESKTOP_ENTRY" "$@" \
-		"$title" "$body" 2>/dev/null); do
+until chosen=$(send_notification); do
 	# Retry ONLY while the daemon is absent. A failure with the daemon
 	# reachable is something else (it may even have fired after the toast
 	# displayed), and retrying would re-deliver the same notification.

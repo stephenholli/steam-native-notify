@@ -530,6 +530,64 @@ else
 	print("  skip delivery retry (mktemp failed)")
 end
 
+-- Durable Quickshell activation must survive the same daemon recovery path.
+-- GetServerInformation and the first notify-send fail while the daemon is
+-- absent; the next send sees Quickshell and must rebuild argv with its hint.
+local recovery_h = io.popen("mktemp -d")
+local recovery_dir = recovery_h:read("*l")
+recovery_h:close()
+if recovery_dir and recovery_dir ~= "" then
+	local rg = assert(io.open(recovery_dir .. "/gdbus", "w"))
+	rg:write(([[#!/bin/sh
+case "$*" in
+*GetServerInformation*)
+	n=$(cat %s/server-info-count 2>/dev/null || echo 0)
+	n=$((n + 1))
+	printf %%s "$n" > %s/server-info-count
+	[ "$n" -ge 2 ] || exit 1
+	printf '%%s\n' 'ssss "quickshell" "quickshell" "" "1.2"'
+	;;
+*GetCapabilities*)
+	n=$(cat %s/caps-count 2>/dev/null || echo 0)
+	n=$((n + 1))
+	printf %%s "$n" > %s/caps-count
+	[ "$n" -ge 3 ] || exit 1
+	printf '%%s\n' "(['actions', 'body', 'body-markup'],)"
+	;;
+esac
+]]):format(recovery_dir, recovery_dir, recovery_dir, recovery_dir))
+	rg:close()
+	local rn = assert(io.open(recovery_dir .. "/notify-send", "w"))
+	rn:write(([[#!/bin/sh
+n=$(cat %s/notify-count 2>/dev/null || echo 0)
+n=$((n + 1))
+printf %%s "$n" > %s/notify-count
+[ "$n" -ge 2 ] || exit 1
+printf '%%s\n' "$@" > %s/notify-args
+printf default
+]]):format(recovery_dir, recovery_dir, recovery_dir))
+	rn:close()
+	local rs = assert(io.open(recovery_dir .. "/steam", "w"))
+	rs:write("#!/bin/sh\nexit 0\n")
+	rs:close()
+	io.popen("chmod +x '" .. recovery_dir .. "/gdbus' '" .. recovery_dir
+		.. "/notify-send' '" .. recovery_dir .. "/steam'"):close()
+	local recovery_run = io.popen("NOTIFY_ACTION_RETRY_DELAY=0 XDG_CACHE_HOME='" .. recovery_dir
+		.. "' PATH='" .. recovery_dir .. "':\"$PATH\" " .. root
+		.. "/tools/notify-action 'T' 'b' '' 'click:" .. encoded .. "' ''; echo done")
+	if recovery_run then recovery_run:read("*a"); recovery_run:close() end
+	local recovery_args = slurp(recovery_dir .. "/notify-args")
+	check("retry recovery: Quickshell durable hint is restored",
+		recovery_args and recovery_args:find('-h\nstring:omarchy-exec-argv:["steam","'
+			.. activation_url .. '"]\n', 1, true) ~= nil, tostring(recovery_args))
+	check("retry recovery: notification is delivered on the second attempt",
+		slurp(recovery_dir .. "/notify-count") == "2",
+		tostring(slurp(recovery_dir .. "/notify-count")))
+	io.popen("rm -rf '" .. recovery_dir .. "'"):close()
+else
+	print("  skip Quickshell retry recovery (mktemp failed)")
+end
+
 -- Markup escaping is conditional on the daemon's advertised capabilities:
 -- a plain-text daemon must receive the raw body, a markup daemon the escaped
 -- one, and an unreachable daemon defaults to escaped. gdbus and notify-send
