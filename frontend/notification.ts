@@ -17,14 +17,6 @@ export type DecodedNotification =
 /** eSource on Steam's notification object: which of the two systems produced it. */
 const SOURCE_SERVER = 2;
 
-let foundBrowserInfo: unknown = null;
-
-export function takeToastBrowserInfo(): unknown {
-	const value = foundBrowserInfo;
-	foundBrowserInfo = null;
-	return value;
-}
-
 /**
  * The notification Steam attached to the toast, read out of the React tree.
  *
@@ -45,18 +37,6 @@ export function notificationFromToast(win: Window): DecodedNotification | null {
 		if (!fiber) return null;
 		for (let depth = 0; fiber && depth < 30; depth++) {
 			const props = fiber.memoizedProps ?? fiber.pendingProps;
-			if (!foundBrowserInfo) {
-				try {
-					const browserInfo =
-						props?.browserInfo ??
-						props?.params?.browserInfo ??
-						props?.value?.params?.browserInfo ??
-						props?.value?.browserInfo;
-					if (browserInfo && typeof browserInfo === 'object') foundBrowserInfo = browserInfo;
-				} catch {
-					/* hostile context getter; keep walking */
-				}
-			}
 			const notification = props?.notification;
 			if (!decoded && notification && typeof notification === 'object') {
 				const type = Number((notification as any).eType);

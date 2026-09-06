@@ -1,6 +1,7 @@
 import { dlog } from './log';
 import { chooseHandler, type Candidate } from './choose';
 import { firstFiber } from './fiber';
+import { captureAppIdFromToastName } from './click';
 
 /**
  * The replay click path: a notification click re-runs the handler Steam
@@ -37,6 +38,7 @@ type CandidateMeta = Omit<Candidate, 'fn'>;
 interface StashEntry {
 	token: string;
 	name: string;
+	captureAppId: number;
 	stashedAt: number;
 	/** The proven handler, or null for an ambiguous toast kept for inspect. */
 	fn: ((e: unknown) => unknown) | null;
@@ -142,6 +144,8 @@ function collectCandidates(rootFiber: any): Candidate[] {
  */
 export function stashToastHandler(win: Window, name: string, token: string): boolean {
 	try {
+		const captureAppId = captureAppIdFromToastName(name);
+		if (captureAppId === null) return false;
 		const doc = win.document;
 		if (!doc) return false;
 		const fiber = firstFiber(doc);
@@ -174,6 +178,7 @@ export function stashToastHandler(win: Window, name: string, token: string): boo
 		stash.set(token, {
 			token,
 			name,
+			captureAppId,
 			stashedAt: Date.now(),
 			fn: picked?.chosen.fn ?? null,
 			chosen: picked ? toMeta(picked.chosen) : null,
@@ -205,10 +210,11 @@ export function inspectReplayStash(): void {
 
 /**
  * Invoke a stashed handler with a stub event. No identifier targets the most
- * recent entry for the tools/fire probe. A throw is logged and swallowed.
- * Returns whether a live handler was found and ran without throwing.
+ * recent entry for the tools/fire probe. Every caller supplies a confirmed
+ * current surface; the stored capture must match it. A throw is logged and
+ * swallowed. Returns whether a matching handler ran without throwing.
  */
-export function invokeReplayHandler(identifier?: string): boolean {
+export function invokeReplayHandler(identifier: string | undefined, focusedAppId: number): boolean {
 	let entry: StashEntry | undefined;
 	if (identifier) {
 		entry = stash.get(identifier);
@@ -222,6 +228,12 @@ export function invokeReplayHandler(identifier?: string): boolean {
 	}
 	if (!entry) {
 		dlog(`replay: invoke ${identifier ?? '(latest)'} -> no stash entry`);
+		return false;
+	}
+	// The URL's appid is untrusted; only the capture stored with this closure
+	// may authorize replay on the current surface.
+	if (entry.captureAppId !== focusedAppId) {
+		dlog(`replay: invoke ${entry.name} -> surface mismatch capture=${entry.captureAppId} current=${focusedAppId}`);
 		return false;
 	}
 	const age = Math.round((Date.now() - entry.stashedAt) / 1000);

@@ -2,6 +2,7 @@ import { ffi, findModuleExport } from 'millennium';
 import { dlog, safeJson } from './log';
 import { parseCallableJson, settings } from './settings';
 import { inspectReplayStash, invokeReplayHandler } from './replay';
+import { currentClickSurface } from './overlay';
 
 /**
  * The tools/fire door: dev machinery, fenced off from the capture path.
@@ -126,8 +127,11 @@ export function startDevFirePoll(): void {
 			// handler without a desktop click. Neither throws.
 			if (cmd.replay) {
 				if (cmd.replay.call === 'inspect') inspectReplayStash();
-				else if (cmd.replay.call === 'invoke') invokeReplayHandler(cmd.replay.name);
-				else dlog(`replay: unknown call ${String(cmd.replay.call)}`);
+				else if (cmd.replay.call === 'invoke') {
+					const surface = await currentClickSurface();
+					if (surface) invokeReplayHandler(cmd.replay.name, surface.focusedAppId);
+					else dlog('replay: invoke refused: current surface unknown');
+				} else dlog(`replay: unknown call ${String(cmd.replay.call)}`);
 				return;
 			}
 			if (cmd.server && typeof cmd.server.type === 'number') {

@@ -5,15 +5,13 @@ import { invokeReplayHandler } from './replay';
 import {
 	openChatInOverlay,
 	openChatOnDesktop,
-	openChatRoomDialog,
 	openClipInOverlay,
 	openDialogInOverlay,
 	openInOverlay,
 	openMediaInOverlay,
 	openPlaytimeDialog,
 	openScreenshotInOverlay,
-	overlayFocusedAppId,
-	runningOverlayAppId,
+	currentClickSurface,
 } from './overlay';
 
 /**
@@ -51,7 +49,7 @@ function requestFocus(kind: FocusKind): void {
  * through the client's own URL executor (steam://open/main -- the same thing
  * launcher activation does). Returns true when the window already existed.
  */
-function ensureMainWindow(): boolean {
+async function ensureMainWindow(): Promise<boolean> {
 	try {
 		const mgr: any = Reflect.get(globalThis, 'g_PopupManager');
 		const popups: Iterable<any> = mgr?.m_mapPopups?.values?.() ?? [];
@@ -68,7 +66,7 @@ function ensureMainWindow(): boolean {
 	try {
 		dlog('click-bridge: main window closed; opening it');
 		const sc: any = Reflect.get(globalThis, 'SteamClient');
-		sc?.URL?.ExecuteSteamURL?.('steam://open/main');
+		await sc?.URL?.ExecuteSteamURL?.('steam://open/main');
 	} catch (e) {
 		dlog(`click-bridge: open main failed: ${(e as Error)?.message ?? e}`);
 	}
@@ -95,24 +93,23 @@ function mainWindowPresent(): boolean {
  * fixed delay: on a slow start a blind timer fires the door against nothing
  * and the click is silently lost.
  */
-function afterMainWindow(fn: () => void): void {
-	if (ensureMainWindow()) {
-		fn();
-		return;
+async function afterMainWindow(fn: () => boolean | Promise<boolean>): Promise<boolean> {
+	if (!(await ensureMainWindow())) {
+		const present = await new Promise<boolean>((resolve) => {
+			const deadline = Date.now() + 6000;
+			const poll = window.setInterval(() => {
+				const ready = mainWindowPresent();
+				if (!ready && Date.now() < deadline) return;
+				window.clearInterval(poll);
+				resolve(ready);
+			}, 250);
+		});
+		if (!present) {
+			dlog('click-bridge: main window did not appear; dispatch refused');
+			return false;
+		}
 	}
-	const deadline = Date.now() + 6000;
-	const poll = window.setInterval(() => {
-		const present = mainWindowPresent();
-		if (!present && Date.now() < deadline) return;
-		window.clearInterval(poll);
-		if (!present) dlog('click-bridge: main window slow to appear; running the door anyway');
-		fn();
-	}, 250);
-}
-
-function chatRoomParts(route: string): [string, string] | null {
-	const parts = route.slice('action:chatroom:'.length).split(':');
-	return parts.length === 2 && parts[0] && parts[1] ? [parts[0], parts[1]] : null;
+	return fn();
 }
 
 /**
@@ -122,80 +119,76 @@ function chatRoomParts(route: string): [string, string] | null {
  * main window), any other appid the game's overlay. Adding a token here
  * covers both surfaces at once.
  */
-function runActionToken(appid: number, route: string): void {
+async function runActionToken(appid: number, route: string): Promise<boolean> {
 	const surface = appid === 0 ? 'desktop' : 'overlay';
 	let opened: boolean;
-	if (route.startsWith('action:chatroom:')) {
-		const parts = chatRoomParts(route);
-		if (!parts) {
-			dlog(`click-bridge: malformed action ${route}`);
-			return;
-		}
-		opened = openChatRoomDialog(appid, parts[0], parts[1]);
-	} else if (route.startsWith('action:screenshot:')) {
-		opened = openScreenshotInOverlay(appid, route.slice('action:screenshot:'.length));
+	if (route.startsWith('action:screenshot:')) {
+		opened = await openScreenshotInOverlay(appid, route.slice('action:screenshot:'.length));
 	} else if (route.startsWith('action:clip:')) {
-		opened = openClipInOverlay(appid, route.slice('action:clip:'.length));
+		opened = await openClipInOverlay(appid, route.slice('action:clip:'.length));
 	} else if (route === 'action:media') {
-		opened = openMediaInOverlay(appid);
+		opened = await openMediaInOverlay(appid);
 	} else if (route === 'action:requestplaytime') {
 		// The overlay renders this through the ingestion's dialog-request
 		// list; the desktop has no container for it and uses the navigator
 		// door instead. Both observed.
-		opened = appid === 0 ? openPlaytimeDialog(0) : openDialogInOverlay(appid, 'requestplaytime');
+		opened = await (appid === 0 ? openPlaytimeDialog(0) : openDialogInOverlay(appid, 'requestplaytime'));
 	} else {
 		dlog(`click-bridge: unbridgeable action ${route}`);
-		return;
+		return false;
 	}
 	if (!opened) dlog(`click-bridge: ${surface} door failed`);
+	return opened;
 }
 
-function desktopClick(route: string): void {
+function desktopClick(route: string): Promise<boolean> {
 	if (route.startsWith('action:')) {
-		afterMainWindow(() => runActionToken(0, route));
-		return;
+		return afterMainWindow(() => runActionToken(0, route));
 	}
 	// Navigate once the window exists; a freshly created one needs its settle
 	// before the URL executor can land a page change in it.
-	afterMainWindow(() => {
+	return afterMainWindow(async () => {
 		try {
 			const sc: any = Reflect.get(globalThis, 'SteamClient');
+			if (typeof sc?.URL?.ExecuteSteamURL !== 'function') return false;
 			dlog(`click-bridge: desktop ${route}`);
-			sc?.URL?.ExecuteSteamURL?.(route);
+			return (await sc.URL.ExecuteSteamURL(route)) !== false;
 		} catch (e) {
 			dlog(`click-bridge: navigate failed: ${(e as Error)?.message ?? e}`);
+			return false;
 		}
 	});
 }
 
-function dispatchFallback(runningAppId: number | null, focusedAppId: number, route: string): boolean {
+async function dispatchFallback(runningAppId: number | null, focusedAppId: number, route: string): Promise<boolean> {
+	// Older envelopes can still carry this session-dependent action. Refuse
+	// before creating or raising a window; only their captured callback is safe.
+	if (route.startsWith('action:chatroom:')) {
+		dlog('click-bridge: group chat has no durable fallback');
+		return false;
+	}
 	const focused = focusedAppId > 0;
 	if (route.startsWith('steam://friends/message/')) {
 		const sid = route.slice('steam://friends/message/'.length);
 		if (focused) {
-			if (!openChatInOverlay(focusedAppId, sid)) dlog('click-bridge: overlay door failed');
+			return openChatInOverlay(focusedAppId, sid);
 		} else if (runningAppId !== null) {
-			afterMainWindow(() => {
-				if (!openChatOnDesktop(sid)) dlog('click-bridge: desktop chat door failed');
-			});
+			return afterMainWindow(() => openChatOnDesktop(sid));
 		} else {
-			desktopClick(route);
+			return desktopClick(route);
 		}
-		return true;
 	}
 	if (!focused) {
-		desktopClick(route);
-		return true;
+		return desktopClick(route);
 	}
 	if (route.startsWith('action:')) {
-		runActionToken(focusedAppId, route);
-		return true;
+		return runActionToken(focusedAppId, route);
 	}
 	let opened: boolean;
 	if (route.startsWith(OPENURL_PREFIX)) {
-		opened = openInOverlay(focusedAppId, route.slice(OPENURL_PREFIX.length));
+		opened = await openInOverlay(focusedAppId, route.slice(OPENURL_PREFIX.length));
 	} else if (route.startsWith('steam://settings/')) {
-		opened = openDialogInOverlay(focusedAppId, 'settings');
+		opened = await openDialogInOverlay(focusedAppId, 'settings');
 	} else if (route.startsWith('steam://nav/')) {
 		dlog(`click-bridge: inert in-game, mirrors Steam: ${route}`);
 		return true;
@@ -209,10 +202,14 @@ function dispatchFallback(runningAppId: number | null, focusedAppId: number, rou
 
 export async function dispatchClick(envelope: ClickEnvelope): Promise<void> {
 	try {
-		const runningAppId = await runningOverlayAppId();
-		const focusedAppId = runningAppId !== null && overlayFocusedAppId() === runningAppId ? runningAppId : 0;
+		const surface = await currentClickSurface();
+		if (!surface) {
+			dlog('click-bridge: current surface unknown; dispatch refused');
+			return;
+		}
+		const { runningAppId, focusedAppId } = surface;
 		const replayed = surfaceMatches(envelope.captureAppId, focusedAppId)
-			? invokeReplayHandler(envelope.token)
+			? invokeReplayHandler(envelope.token, focusedAppId)
 			: false;
 		const mode = deliveryMode(envelope, focusedAppId, replayed);
 		if (mode === 'replay') {
@@ -225,7 +222,7 @@ export async function dispatchClick(envelope: ClickEnvelope): Promise<void> {
 			return;
 		}
 		dlog(`click-bridge: fallback ${envelope.fallback}`);
-		if (dispatchFallback(runningAppId, focusedAppId, envelope.fallback) && focusedAppId === 0) {
+		if ((await dispatchFallback(runningAppId, focusedAppId, envelope.fallback)) && focusedAppId === 0) {
 			requestFocus(envelope.focus);
 		}
 	} catch (e) {

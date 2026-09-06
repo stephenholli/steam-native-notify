@@ -2,10 +2,10 @@ import { definePlugin, ffi, IconsModule } from 'millennium';
 import { CLICK_PAYLOAD_PREFIX, captureAppIdFromToastName, encodeClickEnvelope, focusKindFor, newClickToken } from './click';
 import { typeName } from './generated/notifications';
 import { setIdentity } from './identity';
-import { notificationFromToast, takeToastBrowserInfo, type DecodedNotification } from './notification';
+import { notificationFromToast, type DecodedNotification } from './notification';
 import { dlog, safeJson } from './log';
 import { startClickBridge } from './clickbridge';
-import { rememberToastContext, trackOverlayFocus } from './overlay';
+import { trackOverlayFocus } from './overlay';
 import { clientOverlayAction, clientRoute, serverRoute } from './routes';
 import { startDevFirePoll } from './devfire';
 import { stashToastHandler } from './replay';
@@ -161,7 +161,6 @@ function deliverToast(win: Window, name: string, text: string): void {
 	// names (notificationtoasts_uid<appid>-...) mean the game was focused,
 	// _desktop names mean it was not -- even with a game running.
 	const overlayCtx = name.startsWith('notificationtoasts_uid');
-	rememberToastContext(overlayCtx, takeToastBrowserInfo());
 
 	let type: number | undefined;
 	let kind: string | undefined;

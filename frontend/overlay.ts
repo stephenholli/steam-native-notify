@@ -24,22 +24,19 @@ let overlayStore: any;
  * overlay-context toast while the game was backgrounded), so the click bridge
  * re-checks focus at CLICK time instead of trusting the notify-time context.
  */
-let focusedOverlayAppId = 0;
+let focusedOverlayAppId: number | null = null;
 
 export function trackOverlayFocus(): void {
+	focusedOverlayAppId = null;
 	try {
 		const sc: any = Reflect.get(globalThis, 'SteamClient');
 		sc?.System?.UI?.RegisterForOverlayGameWindowFocusChanged?.((appid: number) => {
-			focusedOverlayAppId = Number(appid) || 0;
+			const value = Number(appid);
+			focusedOverlayAppId = Number.isSafeInteger(value) && value >= 0 ? value : null;
 		});
 	} catch (e) {
 		dlog(`overlay focus tracking failed: ${(e as Error)?.message ?? e}`);
 	}
-}
-
-/** The appid of the game window that has focus right now, or 0. */
-export function overlayFocusedAppId(): number {
-	return focusedOverlayAppId;
 }
 
 export function findOverlayStore(): any {
@@ -62,27 +59,29 @@ export function findOverlayStore(): any {
 }
 
 /**
- * The appid whose overlay is up, or null when no game is running. The overlay
- * browser info is the same map Steam keys its overlay instances on, so a
- * non-empty answer means an overlay exists to navigate.
+ * Resolve the click surface from overlay instances and the live focus signal.
+ * Missing, malformed, or contradictory discovery is unknown, never desktop.
+ * An empty instance list confirms desktop even before the first focus event.
  */
-export async function runningOverlayAppId(): Promise<number | null> {
+export async function currentClickSurface(): Promise<{ runningAppId: number | null; focusedAppId: number } | null> {
 	try {
 		const sc: any = Reflect.get(globalThis, 'SteamClient');
 		const info = await sc?.Overlay?.GetOverlayBrowserInfo?.();
-		if (!Array.isArray(info) || info.length === 0) return null;
-		// With several games running, prefer the entry for the FOCUSED game:
-		// answering with a different game's appid would make the focus check
-		// read false and raise the desktop over a focused fullscreen game.
-		const entry = info.find((e: any) => Number(e?.appID) === focusedOverlayAppId) ?? info[0];
-		const appid = Number(entry?.appID);
-		return Number.isFinite(appid) && appid > 0 ? appid : null;
+		if (!Array.isArray(info)) return null;
+		const appids = info.map((entry: any) => Number(entry?.appID));
+		if (appids.some((appid) => !Number.isSafeInteger(appid) || appid <= 0)) return null;
+		const focused = focusedOverlayAppId;
+		if (focused !== null && focused > 0) {
+			return appids.includes(focused) ? { runningAppId: focused, focusedAppId: focused } : null;
+		}
+		if (appids.length === 0) return { runningAppId: null, focusedAppId: 0 };
+		return focused === 0 ? { runningAppId: appids[0], focusedAppId: 0 } : null;
 	} catch {
 		return null;
 	}
 }
 
-function sendOverlayRequest(appid: number, bWebPage: boolean, strDialog: string, steamidTarget: string = '0'): boolean {
+async function sendOverlayRequest(appid: number, bWebPage: boolean, strDialog: string, steamidTarget: string = '0'): Promise<boolean> {
 	const store = findOverlayStore();
 	if (!store) return false;
 	const request = {
@@ -96,8 +95,7 @@ function sendOverlayRequest(appid: number, bWebPage: boolean, strDialog: string,
 		strConnectString: '',
 	};
 	dlog(`overlay: open appid=${appid} ${safeJson(strDialog)} target=${steamidTarget}`);
-	store.OnGameOverlayActivateRequested(request);
-	return true;
+	return (await store.OnGameOverlayActivateRequested(request)) !== false;
 }
 
 /**
@@ -106,7 +104,7 @@ function sendOverlayRequest(appid: number, bWebPage: boolean, strDialog: string,
  * external steam://friends/message URL lets the client pick the surface, and
  * it picks the overlay whenever a game is running, focused or not.
  */
-export function openChatInOverlay(appid: number, steamid64: string): boolean {
+export function openChatInOverlay(appid: number, steamid64: string): Promise<boolean> {
 	return sendOverlayRequest(appid, false, 'chat', steamid64);
 }
 
@@ -116,90 +114,12 @@ export function openChatInOverlay(appid: number, steamid64: string): boolean {
  * a game is running but unfocused -- the external friends/message URL would
  * open the overlay chat invisibly.
  */
-export function openChatOnDesktop(steamid64: string): boolean {
+export function openChatOnDesktop(steamid64: string): Promise<boolean> {
 	return sendOverlayRequest(0, false, 'chat', steamid64);
 }
 
-/**
- * The context descriptor chat dialogs key on. ShowChatRoomGroupDialog's first
- * argument flows into GetPerContextChatData / ShowAndOrActivateChat, both
- * keyed by the browserInfo's m_unPID: the wrong object means the dialog opens
- * on the wrong surface AND never reuses an existing window. Steam's own toast
- * click passes the toast popup's params.browserInfo; index.tsx stashes each
- * toast's browserInfo here per surface at capture time.
- */
-let desktopToastCtx: unknown = null;
-let overlayToastCtx: unknown = null;
-
-export function rememberToastContext(overlayCtx: boolean, browserInfo: unknown): void {
-	if (!browserInfo) return;
-	if (overlayCtx) {
-		if (!overlayToastCtx) dlog('overlay: toast context stashed (overlay)');
-		overlayToastCtx = browserInfo;
-	} else {
-		if (!desktopToastCtx) dlog('overlay: toast context stashed (desktop)');
-		desktopToastCtx = browserInfo;
-	}
-}
-
-/**
- * The FriendsUI dispatcher the ingestion's chat case calls into; it also
- * carries ShowChatRoomGroupDialog, which is Steam's own GroupChatMessage
- * toast click: LN.ShowChatRoomGroupDialog(browserInfo, chat_group_id,
- * chat_id). No URL reaches the room dialog; this does.
- */
-let chatDispatcher: any;
-
-function findChatDispatcher(): any {
-	if (chatDispatcher) return chatDispatcher;
-	try {
-		chatDispatcher = findModuleExport((e: any) => {
-			try {
-				return (
-					typeof e?.ShowChatRoomGroupDialog === 'function' &&
-					typeof e?.ShowFriendChatDialog === 'function'
-				);
-			} catch {
-				return false;
-			}
-		});
-	} catch (e) {
-		dlog(`chat dispatcher lookup failed: ${(e as Error)?.message ?? e}`);
-	}
-	return chatDispatcher;
-}
-
-/** Open a group chat room dialog on the surface for appid (0 = desktop). */
-export function openChatRoomDialog(appid: number, groupId: string, chatId: string): boolean {
-	const friends = findChatDispatcher();
-	if (!friends) return false;
-	let ctx: any = appid > 0 ? overlayToastCtx : desktopToastCtx;
-	// A stash from a game that has since exited points at a dead PID; the
-	// dispatcher would report success while opening nothing. When the context
-	// names an appid, it must be the one being targeted.
-	if (appid > 0 && ctx && typeof ctx.m_unAppID === 'number' && ctx.m_unAppID !== appid) {
-		dlog(`overlay: stashed toast context is for appid ${ctx.m_unAppID}, not ${appid}; treating as missing`);
-		ctx = null;
-	}
-	if (!ctx) {
-		// The dispatcher dereferences the context's m_unPID unconditionally;
-		// calling without one throws inside Steam's code. Known limit: after a
-		// load, the slot for a surface only fills once a toast renders there.
-		dlog(`overlay: chat room appid=${appid} has no stashed toast context`);
-		return false;
-	}
-	try {
-		dlog(`overlay: chat room appid=${appid} group=${groupId} chat=${chatId}`);
-		friends.ShowChatRoomGroupDialog(ctx, groupId, chatId);
-		return true;
-	} catch (e) {
-		dlog(`overlay: chat room failed: ${(e as Error)?.message ?? e}`);
-		return false;
-	}
-}
-
 /** Open a web page in the running game's overlay browser. */
-export function openInOverlay(appid: number, url: string): boolean {
+export function openInOverlay(appid: number, url: string): Promise<boolean> {
 	return sendOverlayRequest(appid, true, url);
 }
 
@@ -210,7 +130,7 @@ export function openInOverlay(appid: number, url: string): boolean {
  * Settings("System") in the handler, which is exactly where a SystemUpdate
  * click goes.
  */
-export function openDialogInOverlay(appid: number, dialog: string): boolean {
+export function openDialogInOverlay(appid: number, dialog: string): Promise<boolean> {
 	return sendOverlayRequest(appid, false, dialog);
 }
 
@@ -220,7 +140,7 @@ export function openDialogInOverlay(appid: number, dialog: string): boolean {
  * the right thing -- the desktop one (appid 0) shows the main-window dialog,
  * the overlay one routes through the activate-overlay request list.
  */
-export function openPlaytimeDialog(appid: number): boolean {
+export async function openPlaytimeDialog(appid: number): Promise<boolean> {
 	const store = findOverlayStore();
 	if (!store) return false;
 	try {
@@ -230,8 +150,7 @@ export function openPlaytimeDialog(appid: number): boolean {
 			return false;
 		}
 		dlog(`overlay: playtime dialog appid=${appid}`);
-		nav.RequestPlaytimeDialog('manual');
-		return true;
+		return (await nav.RequestPlaytimeDialog('manual')) !== false;
 	} catch (e) {
 		dlog(`overlay: playtime dialog failed: ${(e as Error)?.message ?? e}`);
 		return false;
@@ -249,7 +168,7 @@ export function openPlaytimeDialog(appid: number): boolean {
  * own in-game screenshot toast click does: nav.Media.Screenshot({state:{id}})
  * with the notification's screenshot_handle as the id.
  */
-export function openScreenshotInOverlay(appid: number, id: string): boolean {
+export async function openScreenshotInOverlay(appid: number, id: string): Promise<boolean> {
 	const store = findOverlayStore();
 	if (!store) return false;
 	try {
@@ -259,8 +178,7 @@ export function openScreenshotInOverlay(appid: number, id: string): boolean {
 			return false;
 		}
 		dlog(`overlay: screenshot appid=${appid} id=${id}`);
-		nav.Media.Screenshot({ state: { id } });
-		return true;
+		return (await nav.Media.Screenshot({ state: { id } })) !== false;
 	} catch (e) {
 		dlog(`overlay: screenshot failed: ${(e as Error)?.message ?? e}`);
 		return false;
@@ -271,7 +189,7 @@ export function openScreenshotInOverlay(appid: number, id: string): boolean {
  * Open one specific clip, the way Steam's own recording toast click does:
  * nav.Media.Clip({state:{id}}) with the notification's clip_id.
  */
-export function openClipInOverlay(appid: number, id: string): boolean {
+export async function openClipInOverlay(appid: number, id: string): Promise<boolean> {
 	const store = findOverlayStore();
 	if (!store) return false;
 	try {
@@ -281,15 +199,14 @@ export function openClipInOverlay(appid: number, id: string): boolean {
 			return false;
 		}
 		dlog(`overlay: clip appid=${appid} id=${id}`);
-		nav.Media.Clip({ state: { id } });
-		return true;
+		return (await nav.Media.Clip({ state: { id } })) !== false;
 	} catch (e) {
 		dlog(`overlay: clip failed: ${(e as Error)?.message ?? e}`);
 		return false;
 	}
 }
 
-export function openMediaInOverlay(appid: number): boolean {
+export async function openMediaInOverlay(appid: number): Promise<boolean> {
 	const store = findOverlayStore();
 	if (!store) return false;
 	try {
@@ -299,8 +216,7 @@ export function openMediaInOverlay(appid: number): boolean {
 			return false;
 		}
 		dlog(`overlay: media appid=${appid}`);
-		nav.Media.Grid();
-		return true;
+		return (await nav.Media.Grid()) !== false;
 	} catch (e) {
 		dlog(`overlay: media failed: ${(e as Error)?.message ?? e}`);
 		return false;

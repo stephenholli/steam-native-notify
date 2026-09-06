@@ -87,16 +87,9 @@ export function clientOverlayAction(type: number, fields: Record<string, PbValue
 			return typeof handle === 'string' && handle ? `screenshot:${handle}` : 'media';
 		}
 		case 9: {
-			// GroupChatMessage: Steam's click is ShowChatRoomGroupDialog with
-			// the room coordinates the payload carries (real capture
-			// 2026-08-29: mentions toast with chat_group_id + chat_id). No URL
-			// reaches the room dialog; the bridge's dispatcher call does, on
-			// every surface.
-			const group = fields.chat_group_id;
-			const chat = fields.chat_id;
-			if (typeof group === 'string' && group && typeof chat === 'string' && chat) {
-				return `chatroom:${group}:${chat}`;
-			}
+			// ShowChatRoomGroupDialog requires the toast's session-only browser
+			// context. No verified restart-independent door exists; exact replay
+			// preserves the captured click while its session and surface match.
 			return null;
 		}
 		case 45: // PlaytimeWarning -> overlay playtime request dialog
