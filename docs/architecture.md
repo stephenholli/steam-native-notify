@@ -166,8 +166,9 @@ action.
 - Windows focus is a reversible topmost pulse after a dispatched desktop click.
   The canonical URL VM pass verified history storage, exact replay, and
   Achievement restart/cold-start fallback through active-session protocol
-  invocation. UI clicks and visual focus remain untested; subsequent surface
-  and dispatch-completion fixes have offline coverage only. Chat selection
+  invocation. The final artifact repeated Achievement exact replay and
+  post-restart fallback after the surface and dispatch-completion fixes. UI
+  clicks and visual focus remain untested. Chat selection
   accepts the first visible titled `steamwebhelper` window other than `Steam`;
   another Steam dialog can match, so selecting the intended chat is unverified
   when several candidate windows exist. `ShellExperienceHost` can remain the

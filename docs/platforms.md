@@ -553,11 +553,12 @@ backend logs the unsupported delivery and leaves Steam's toast intact.
 
 ### Current unified validation results
 
-These results predate the final surface and dispatch-completion corrections.
-Those corrections have offline regression coverage; they have not been run in
-Steam on either platform. They bind replay to the stored capture surface,
-refuse unknown current surfaces, remove the session-dependent group-chat
-fallback, and await completed desktop dispatch before requesting focus.
+The final artifact includes the surface and dispatch-completion corrections:
+replay is bound to the stored capture surface, unknown current surfaces are
+refused, the session-dependent group-chat fallback is absent, and desktop
+dispatch completes before focus is requested. That artifact ran on native
+Linux and in the Windows VM; the Windows checks below used active-session
+protocol invocation rather than UI clicks.
 
 - Windows PowerShell 5.1 source tests passed all eight helper assertions,
   including bounded canonical activation XML and one-shot process exit
@@ -575,6 +576,9 @@ fallback, and await completed desktop dispatch before requesting focus.
 - the focus helper logged selection of the named friend chat plus a reversible
   topmost pulse, and main-window pulses for both Achievement fallbacks; no
   visual foreground result or UI click was measured
+- after the final corrections, a fresh Achievement exact replay and
+  post-restart fallback repeated on the final artifact; the focus log followed
+  the desktop dispatch log
 - a clean planned guest reboot remains untested; the persistence result came
   from the external VM/container power cycle
 

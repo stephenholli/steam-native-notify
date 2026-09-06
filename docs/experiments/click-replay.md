@@ -22,8 +22,9 @@ history UI clicks worked with Steam running and fully stopped; live-banner and
 in-game clicks remain untested. The Windows canonical URL VM pass verified
 history storage, exact replay, and Achievement restart/cold-start fallback
 through active-session protocol invocation; UI clicks, visual focus, and a
-clean guest reboot remain untested. Later surface and dispatch-completion fixes
-have offline coverage only. Group chat retains exact replay but has no durable
+clean guest reboot remain untested. The final artifact repeated Achievement
+exact replay and post-restart fallback after the surface and
+dispatch-completion fixes. Group chat retains exact replay but has no durable
 fallback because its room dispatcher requires session-only toast context.
 See `../platforms.md` for the measured scope.
 
