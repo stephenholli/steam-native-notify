@@ -7,8 +7,8 @@
 #
 # Spawned by backend/main.lua (CreateProcessW, CREATE_NO_WINDOW), one process
 # per notification. Delivery exits after Show(). The toast carries
-# activationType="protocol" launching steam://snn/click/<payload>, which Steam
-# hands to the client's JS. After routing, the backend starts this script once
+# activationType="protocol" launching Steam's canonical notification URI,
+# which Steam hands to the client's JS. After routing, the backend starts this script once
 # more with -FocusKind to raise the matching main or chat window briefly; no
 # resident process, registered COM activator, or binary.
 #
@@ -83,8 +83,9 @@ if ($Setup) {
     } catch {
         Write-PluginLog "setup: icon extraction failed, DisplayName-only branding: $($_.Exception.Message)"
     }
-    # No URI scheme of our own: clicks ride steam://snn/... (see the launch
-    # attribute below). An earlier build registered an "snn:" scheme here;
+    # No URI scheme of our own: clicks ride Steam's canonical notification URI
+    # (see the launch attribute below). An earlier build registered an "snn:"
+    # scheme here;
     # remove it so an upgrade leaves nothing behind.
     if (Test-Path -Path $SchemeKey) { Remove-Item -Path $SchemeKey -Recurse -Force }
     Write-PluginLog 'setup: AUMID branding registered'
@@ -344,12 +345,13 @@ if ($FocusKind) {
 # activationType="protocol": Windows launches the URI on a banner or Action
 # Center click. The scheme is Steam's own -- measured on Windows 11, a toast
 # launches schemes Windows already knows (ms-settings:, http:, steam:) and
-# silently refuses one this plugin registers itself. Steam hands steam://snn/...
-# to the client's JS, where frontend/steamurl.ts dispatches the envelope.
+# silently refuses one this plugin registers itself. Steam hands the canonical
+# notification URI to the client's JS, where frontend/steamurl.ts dispatches
+# the envelope.
 # No route means the toast is deliberately inert, mirroring Steam's own.
 $ToastAttrs = ''
 if ($Route -match '^click:([A-Za-z0-9_-]+)$') {
-    $ToastAttrs = " activationType=`"protocol`" launch=`"steam://snn/click/$($Matches[1])`""
+    $ToastAttrs = " activationType=`"protocol`" launch=`"steam://steam-native-notify/notification/$($Matches[1])`""
 }
 $ImageXml = ''
 if ($Icon) {

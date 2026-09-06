@@ -20,10 +20,14 @@ try {
         throw 'FAIL helper has no route-aware focus mode'
     }
     Write-Output 'PASS helper has route-aware focus mode'
-    if ($helperSource -notmatch 'steam://snn/click/\$\(\$Matches\[1\]\)') {
+    if ($helperSource -notmatch 'steam://steam-native-notify/notification/\$\(\$Matches\[1\]\)') {
         throw 'FAIL helper does not persist the durable click envelope in the activation URI'
     }
     Write-Output 'PASS helper persists the durable click envelope in the activation URI'
+    if ($helperSource -match 'steam://snn/') {
+        throw 'FAIL helper retains the legacy steam://snn/ activation URI'
+    }
+    Write-Output 'PASS helper contains no legacy steam://snn/ activation URI'
     Copy-Item -LiteralPath $sourceHelper -Destination $helper
 
     $steamDir = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Valve\Steam').SteamPath
