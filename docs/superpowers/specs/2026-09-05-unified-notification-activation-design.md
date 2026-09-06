@@ -24,7 +24,7 @@ system discards its notification history.
 The canonical activation URL is:
 
 ```text
-steam://steam-native-notify/click/<base64url-envelope>
+steam://steam-native-notify/notification/<base64url-envelope>
 ```
 
 The plugin registers `steam-native-notify` directly with
