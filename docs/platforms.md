@@ -6,8 +6,9 @@ code, and the plan for the platforms that do not deliver yet. Written to be
 pasted into tracking issues. Every platform-specific claim carries a source
 and a status: **verified** against a primary source (its own docs or code),
 or **unverified**. Earlier Linux and Windows activation paths ran natively and
-in a Windows 11 VM. The unified URL path ran on native Linux and partially in
-the Windows VM; Windows restart and reboot checks remain, and macOS has not run.
+in a Windows 11 VM. The unified URL path ran on native Linux and in the Windows
+VM; Windows UI clicks, visual focus, and a clean guest reboot remain untested,
+and macOS has not run.
 
 ## Matrix
 
@@ -16,7 +17,7 @@ the Windows VM; Windows restart and reboot checks remain, and macOS has not run.
 | Linux, native Steam | **shipped**; stored-argv replay and Achievement restart/cold-start fallback observed; UI clicks and visual focus untested | `notify-send` to the FreeDesktop daemon | live `default` action launches the canonical Steam URL; Quickshell persists the fixed argv for exact replay or durable fallback |
 | Linux, Flatpak Steam | paths ready; the host is unsupported by Millennium | same helper; inside the sandbox libnotify routes through the notification portal (plan) | canonical URL; portal action semantics unverified |
 | macOS | backend paths ready; delivery refused, loudly | terminal-notifier `-execute` (plan) | `-execute` writes `.click` (plan) |
-| Windows | **shipped**, EXPERIMENTAL; canonical WinRT storage and FriendOnline exact replay verified; fallback and reboot checks pending | WinRT toast via notify-action.ps1 (Windows PowerShell 5.1, no vendored binary): branding, artwork, re-encode | canonical notification URL; exact replay or durable live-focus fallback, then one-shot route-aware focus |
+| Windows | **shipped**, EXPERIMENTAL; canonical history, FriendOnline/Achievement exact replay, and Achievement restart/cold-start fallback observed; UI clicks and visual focus untested | WinRT toast via notify-action.ps1 (Windows PowerShell 5.1, no vendored binary): branding, artwork, re-encode | canonical notification URL; exact replay or durable live-focus fallback, then one-shot route-aware focus |
 
 Refused (macOS today) means: the backend loads, logs `desktop delivery is
 not implemented on <platform>` at load and `unsupported platform: <platform>
@@ -468,14 +469,15 @@ Three to four days with a Mac. Without one, only the first row.
 - Does `-execute` fire for a body click on a banner, or only from
   Notification Center? (The README says "when the notification is clicked".)
 
-## Windows: shipped, unified activation partially VM-validated
+## Windows: shipped, unified activation VM-validated
 
 The delivery, replay, fallback, history, cold-start, and focus mechanisms ran
 in one dockur/windows Win11 Pro VM with Millennium 3.5.0-beta.2 and Steam before
 the URL namespace changed. The current artifact registered and stored the
-canonical URL in that VM, and a programmatic active-session invocation replayed
-a live FriendOnline handler. The VM stopped before restart, cold-start, and
-reboot checks. The narrow hardware coverage keeps the platform experimental.
+canonical URL in that VM. Programmatic active-session invocations verified
+FriendOnline and Achievement exact replay plus Achievement fallback after an
+unexpected VM/container power cycle and a full Steam stop. The narrow hardware
+coverage keeps the platform experimental.
 
 ### Shape
 
@@ -504,8 +506,10 @@ and focus kind. It contains no notification content. The exact handler stash is
 RAM-only, capped at 256, has no time expiry, and disappears with Steam. The
 WinRT XML stores the complete fallback data in the protocol URL. Prior VM runs
 showed that Windows retained the old protocol target in notification history;
-the current pass confirmed canonical storage and same-session replay. History
-after restart, cold-start, and reboot behavior remain unverified.
+the current pass confirmed canonical storage, same-session replay, persistence
+across an unexpected VM/container power cycle, post-restart fallback, and
+full-stop cold start. A clean planned guest reboot and UI history click remain
+unverified.
 
 No process waits for activation. The old 120-second helper retained about
 32.8MB private memory per notification; the current one-shot focus helper only
@@ -551,13 +555,18 @@ backend logs the unsupported delivery and leaves Steam's toast intact.
   canonical `steam-native-notify` URL registration
 - FriendOnline produced a canonical WinRT history URL; invoking it through the
   active user session logged exact handler replay
+- Achievement produced a canonical WinRT history URL; a fresh active-session
+  invocation logged exact handler replay
+- the saved Achievement URI and its history row survived an unexpected
+  VM/container power cycle; invoking it against the new Steam session logged no
+  stash entry and dispatched the verified achievements fallback
+- with `steam.exe` and `steamwebhelper.exe` fully stopped, the same canonical
+  URL launched Steam and dispatched the fallback after registration
 - the focus helper logged selection of the named friend chat plus a reversible
-  topmost pulse; no visual foreground result or UI click was measured
-- Achievement produced a canonical WinRT history URL with the verified
-  achievements fallback, but the VM stopped before its invocation log could be
-  read
-- restart fallback, full-stop cold start, and guest reboot persistence remain
-  unverified
+  topmost pulse, and main-window pulses for both Achievement fallbacks; no
+  visual foreground result or UI click was measured
+- a clean planned guest reboot remains untested; the persistence result came
+  from the external VM/container power cycle
 
 Windows can still report `ShellExperienceHost` as the foreground owner after a
 toast click. The pulse is a visibility guarantee above ordinary windows, not a
