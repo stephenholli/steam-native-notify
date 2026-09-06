@@ -10,20 +10,25 @@ before non-trivial work. `docs/steam-routing.md` is the analysis of Steam's
 own click handling; `docs/notification-types.md` maps type numbers to names;
 `docs/regeneration.md` records the catalog/schema restoration procedure;
 `docs/platforms.md` is the platform support matrix (Linux native shipped;
-Flatpak paths ready, host unsupported; Windows delivery shipped but the new
-activation URL still awaits VM revalidation; macOS refuses to deliver, loudly)
+Flatpak paths ready, host unsupported; Windows canonical activation validated
+programmatically in one VM; macOS refuses to deliver, loudly)
 and the delivery plan for each.
 
 ## State
 
 **Clicks are exact replay plus a durable route.** At capture time
-frontend/replay.ts stashes Steam's proved click handler under a random token;
-the restored schema/catalog derives a verified fallback. The versioned click
+frontend/replay.ts stashes Steam's proved click handler and capture surface
+under a random token; the restored schema/catalog derives a verified fallback.
+The versioned click
 envelope carries token, capture appid, fallback, and Windows focus target. On
 a matching live surface the bridge replays Steam's handler. On a focus change,
 missing stash, replay throw, or Steam restart it dispatches the fallback against
 current focus. Ambiguous handlers are never replayed; a verified catalog
-fallback can still route. Without either safe action, the click is inert.
+fallback can still route. The stash's capture surface is authoritative; a URL
+cannot move a callback to another surface. Unknown or contradictory current
+surface discovery refuses dispatch. Group chat has exact replay only because
+its room dispatcher requires session-only toast context. Without either safe
+action, the click is inert.
 
 The replay stash retains the latest 256 chosen closures for the Steam session,
 with no time expiry. Heap measurements found current handlers under 0.5KB each
@@ -38,15 +43,17 @@ Quattro history. Other FreeDesktop daemons do not promise a reboot-durable
 executable action. Windows stores the same URL in the WinRT toast. Linux
 validated stored-argv replay and Achievement fallback after restart/cold start;
 UI clicks, visual focus, and shell/login restart remain untested. Windows
-runtime validation remains pending. See `docs/platforms.md` for the evidence.
+validated canonical history storage, exact replay, and Achievement fallback
+after restart/cold start through active-session protocol invocation. UI clicks,
+visual focus, and a clean guest reboot remain untested. Subsequent surface and
+dispatch-completion fixes have offline coverage only. See `docs/platforms.md`.
 
 ## Commands
 
 ```sh
 bun run build          # type-check, pack + install the .star
 bun run typecheck      # tsc --noEmit on its own
-bun run test           # tools/test-backend (Lua, Millennium stubbed)
-                       # + tools/test-frontend (toast decode + click chooser)
+bun run test           # backend, routes, toast decode, chooser, click dispatch
 tools/capture          # is the running .star current, did the hook attach,
                        # what did the last notifications carry
 tools/fire TestFriendOnline   # push a real test toast through Steam's pipeline

@@ -498,7 +498,8 @@ coverage keeps the platform experimental.
       clickbridge.ts validates and routes:
         matching surface + live stash -> exact handler replay
         mismatch/restart/failure       -> verified catalog fallback
-      backend starts notify-action.ps1 -FocusKind main|chat
+      after successful desktop dispatch:
+        backend starts notify-action.ps1 -FocusKind main|chat
       helper pulses the selected window topmost, restores z-order, exits
 
 The envelope contains a random replay token, capture appid, verified fallback,
@@ -549,6 +550,12 @@ backend logs the unsupported delivery and leaves Steam's toast intact.
 
 ### Current unified validation results
 
+These results predate the final surface and dispatch-completion corrections.
+Those corrections have offline regression coverage; they have not been run in
+Steam on either platform. They bind replay to the stored capture surface,
+refuse unknown current surfaces, remove the session-dependent group-chat
+fallback, and await completed desktop dispatch before requesting focus.
+
 - Windows PowerShell 5.1 source tests passed all eight helper assertions,
   including bounded canonical activation XML and one-shot process exit
 - a full Steam restart logged backend load, AUMID setup, hook installation, and
@@ -567,6 +574,11 @@ backend logs the unsupported delivery and leaves Steam's toast intact.
   visual foreground result or UI click was measured
 - a clean planned guest reboot remains untested; the persistence result came
   from the external VM/container power cycle
+
+Chat selection currently accepts the first visible titled `steamwebhelper`
+window whose title is not `Steam`. Other Steam dialogs can match; no verified
+chat-specific discriminator is available in the current helper. Selection of
+the intended chat with several candidate windows remains unverified.
 
 Windows can still report `ShellExperienceHost` as the foreground owner after a
 toast click. The pulse is a visibility guarantee above ordinary windows, not a

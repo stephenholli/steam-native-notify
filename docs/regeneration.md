@@ -36,8 +36,10 @@ offline-testable correctness; replay's oracle is the live client.
 
 **Current use.** The hybrid replays only when capture and click surfaces match.
 It dispatches the catalog route against live focus on mismatch, missing stash,
-replay failure, or Steam restart. This is also the durable payload stored in a
-Windows notification's protocol URI.
+replay failure, or Steam restart. This is also the durable payload stored in
+Linux and Windows notifications' canonical activation URL. Group chat was
+excluded from durable fallback: its room dispatcher needs session-only toast
+context, so only exact replay can preserve that click.
 
 **Recovery command used.** `git restore --source backup/routing-catalog -- frontend/routes.ts
 frontend/urlstore.ts frontend/identity.ts frontend/overlay.ts tools/test-routes
@@ -92,5 +94,5 @@ branch), and re-add the decode fixtures to tools/test-routes.
 - `frontend/routes.ts`, `urlstore.ts`, `identity.ts`, `overlay.ts` — fallback
   generation and click-time dispatch.
 - `frontend/replay.ts`, `choose.ts`, `fiber.ts` — exact same-surface replay.
-- `frontend/clickbridge.ts`, `steamurl.ts` — one dispatcher for Linux click
-  files and Windows protocol activation.
+- `frontend/clickbridge.ts`, `steamurl.ts` — one dispatcher for Linux and
+  Windows canonical protocol activation; the click-file poll is a legacy/test seam

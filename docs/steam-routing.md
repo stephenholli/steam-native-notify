@@ -161,6 +161,10 @@ live 2026-08-29, and all minified surfaces that reshuffle across builds):
   objects are NOT valid browserInfo): the dialog is keyed on its `m_unPID`,
   and a wrong object opens on the wrong surface and never reuses an existing
   window.
+- **Group-chat durability limit**: the room dispatcher requires that toast
+  context, and no restart-independent way to obtain it is verified. The current
+  plugin therefore preserves group-chat clicks through exact same-session,
+  same-surface replay only; it emits no durable room action.
 - **Live game focus**:
   `SteamClient.System.UI.RegisterForOverlayGameWindowFocusChanged` is the
   client's own focus signal; the appid whose overlay exists comes from
@@ -180,7 +184,7 @@ live 2026-08-29, and all minified surfaces that reshuffle across builds):
 | 6 | LowBattery | dismiss only (`bt`) | none |
 | 7 | SystemUpdate | `Settings("System")` (`vt`) | `steam://settings/system` |
 | 8 | FriendMessage | `ShowFriendChatDialog(steamid)` (`Rt`; observed). `response_steamurl`, when non-empty, backs only the tray options button and the gamepad "Accept" menu via `OpenURLInClient` — not the desktop body click | `steam://friends/message/<steamid>` |
-| 9 | GroupChatMessage | `ShowChatRoomGroupDialog(chat_group_id, chat_id)` (`Tt`) | none as a URL — no `steam://` entry point reaches that dialog (FriendsUI registers only `friends/message` and `friends/joinchat`, both steamid-keyed). The click bridge makes the same dispatcher call on the clicked surface ("The overlay and the surface doors") |
+| 9 | GroupChatMessage | `ShowChatRoomGroupDialog(chat_group_id, chat_id)` (`Tt`) | no durable fallback; no verified `steam://` entry point reaches that dialog, and its dispatcher requires session-only toast context. Exact replay remains available on the captured surface in the same session |
 | 10 | FriendInviteRollup | `ShowInvitesDialog` (`jt`) | `steam://openurl/<community>profiles/<me64>/friends/pending` — the same destination Steam's *server* FriendInvite component (`Kt`) navigates to on desktop; the dialog itself has no URL |
 | 12 | FamilySharingStopPlaying | none (`kt`) | none |
 | 14 | Screenshot | `nav.Media.Screenshot({id})` (`ot`) | none as a URL — Media item dialogs have no URL; `steam://open/screenshots` is registered for the gamepad UI mode only. The click bridge makes the same navigator call with `screenshot_handle` (the media grid when the handle is missing) |

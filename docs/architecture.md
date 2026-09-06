@@ -90,11 +90,18 @@ artwork.
 
 `frontend/steamurl.ts` registers the `steam-native-notify` URL section for the
 whole Steam session and rejects malformed paths and envelopes. On a matching
-live surface the dispatcher tries exact replay first. On a surface mismatch,
-missing stash entry, replay throw, or post-restart activation, it uses the
+live surface the dispatcher tries exact replay first. The stash binds the
+capture surface to its closure, so changing the envelope cannot authorize a
+different surface. Missing, malformed, or contradictory overlay discovery
+refuses dispatch. On a surface mismatch, missing stash entry, replay throw,
+or post-restart activation, it uses the
 catalog fallback. A toast with neither a proved handler nor a verified fallback
-is inert. The session-long click-file poll remains only as a legacy/test input;
-its 30-second age check does not limit URL activation.
+is inert. Group chat has exact replay only: its room dispatcher requires a
+toast's session-only browser context, with no verified replacement after a
+restart. Desktop fallback awaits window creation and Steam's dispatch result
+before requesting Windows focus; a failed dispatch or window timeout does not
+request focus. The session-long click-file poll remains only as a legacy/test
+input; its 30-second age check does not limit URL activation.
 
 The replay stash holds the latest 256 chosen closures for the Steam session;
 it has no time expiry. The cap is a memory bound, not a click-lifetime policy.
@@ -132,7 +139,7 @@ appends there too when it refuses a platform:
 | `replay: candidates ... stashed=none (ambiguous)` | no handler is provable; only a verified catalog fallback can act |
 | `replay: candidate <name> #i ...` | per-candidate detail, logged only on anomaly and capped |
 | `click-bridge: replay token=<prefix>` | matching-surface exact replay ran |
-| `click-bridge: fallback <route>` | live-focus catalog dispatch ran |
+| `click-bridge: fallback <route>` | live-focus catalog dispatch was attempted; later door/window failures can refuse it |
 | `click-bridge: no verified fallback token=<prefix>` | replay was unavailable and no safe route exists |
 | `steam-url: registered steam://steam-native-notify/notification/<payload>` | the canonical activation handler attached |
 | `steam-url: click token=<prefix>` | the OS activation URL decoded and entered dispatch |
@@ -155,11 +162,14 @@ action.
   Types without a verified catalog route still fail closed after a surface
   change or Steam restart.
 - Windows focus is a reversible topmost pulse after a dispatched desktop click.
-  It selects the chat window for friend/chat routes and the main window
-  otherwise. The pre-unification Windows path showed that
-  `ShellExperienceHost` can remain keyboard focus owner and that history rows
-  can route after Steam restarts. The canonical URL change still needs the
-  Windows VM pass before those results apply to the current artifact.
+  The canonical URL VM pass verified history storage, exact replay, and
+  Achievement restart/cold-start fallback through active-session protocol
+  invocation. UI clicks and visual focus remain untested; subsequent surface
+  and dispatch-completion fixes have offline coverage only. Chat selection
+  accepts the first visible titled `steamwebhelper` window other than `Steam`;
+  another Steam dialog can match, so selecting the intended chat is unverified
+  when several candidate windows exist. `ShellExperienceHost` can remain the
+  keyboard focus owner. See `docs/platforms.md` for measured scope.
 - Linux's standard action is live only while the daemon retains it and the
   waiting helper remains its action client. Quattro receives a fixed argv hint
   intended for actionable history. Other FreeDesktop histories may retain a

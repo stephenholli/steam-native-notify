@@ -18,7 +18,12 @@ argv hint for Quattro history. Windows stores it as the WinRT protocol target.
 The closures remain RAM-only. An arbitrary FreeDesktop daemon does not promise
 to persist the executable action across reboot. Linux runtime checks covered
 stored-argv replay and Achievement fallback after restart/cold start; UI clicks
-and visual focus remain untested. Windows runtime validation remains pending.
+and visual focus remain untested. The Windows canonical URL VM pass verified
+history storage, exact replay, and Achievement restart/cold-start fallback
+through active-session protocol invocation; UI clicks, visual focus, and a
+clean guest reboot remain untested. Later surface and dispatch-completion fixes
+have offline coverage only. Group chat retains exact replay but has no durable
+fallback because its room dispatcher requires session-only toast context.
 See `../platforms.md` for the measured scope.
 
 The 120-second limit was transport policy, not a measured memory boundary.

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Generate docs/notification-types.md: every notification type, what Steam's
- * own toast click does, and what this plugin emits for it.
+ * own toast click does, and which durable fallbacks this plugin can derive.
  *
  * The type list and payload fields come from the vendored .proto. The prose
  * (what Steam's click does, and why) comes from reading Steam's shipped UI
@@ -44,7 +44,14 @@ identity.setIdentity('76561197960287930');
 
 // Synthesized payloads: for client types, per-field by name; for server types,
 // the body_data fields each rule reads (docs/steam-routing.md, server catalog).
-const SYNTH_FIELD = { appid: 570, steamid: '76561198000000000' };
+const SYNTH_FIELD = {
+	appid: 570,
+	steamid: '76561198000000000',
+	screenshot_handle: '123',
+	clip_id: '456',
+	chat_group_id: '7',
+	chat_id: '8',
+};
 const SYNTH_BODY = {
 	6: { link: 'https://store.steampowered.com/sale/example/' },
 	8: { appid: 1073390, count: 1 },
@@ -67,7 +74,9 @@ function deriveRoute(type, entry) {
 	const message = messages[`CClientNotification${type.name}`] ?? {};
 	const fields = {};
 	for (const { name } of Object.values(message)) fields[name] = SYNTH_FIELD[name] ?? 1;
-	return routes.clientRoute(type.index, fields);
+	const route = routes.clientRoute(type.index, fields);
+	const action = routes.clientOverlayAction(type.index, fields);
+	return route ?? (action ? `action:${action}` : null);
 }
 
 /**
@@ -90,10 +99,10 @@ const CATALOG = {
 	LowBattery: { steam: 'dismiss only', route: 'none' },
 	SystemUpdate: { steam: 'Settings → System', route: '`steam://settings/system`' },
 	FriendMessage: { steam: 'chat dialog with the sender', route: '`steam://friends/message/<steamid>`', observed: true },
-	GroupChatMessage: { steam: 'that chat room’s dialog', route: 'none as a URL — the click bridge opens the room dialog (`chat_group_id` + `chat_id`)' },
+	GroupChatMessage: { steam: 'that chat room’s dialog', route: 'none; exact replay only, because the room dispatcher requires session-only toast context' },
 	FriendInviteRollup: { steam: 'pending-invites dialog', route: '`steam://openurl/` + pending invites page' },
 	FamilySharingStopPlaying: { steam: 'nothing', route: 'none' },
-	Screenshot: { steam: 'that screenshot in the Media dialog', route: 'none as a URL — the click bridge opens that screenshot (`screenshot_handle`; the media grid without one)' },
+	Screenshot: { steam: 'that screenshot in the Media dialog', route: '`action:screenshot:<screenshot_handle>`; `action:media` without a handle' },
 	CloudSyncFailure: { steam: 'library page for the game', route: '`steam://nav/games/details/<appid>`' },
 	CloudSyncConflict: { steam: 'library page for the game', route: '`steam://nav/games/details/<appid>`' },
 	IncomingVoiceChat: { steam: 'chat dialog; does not accept the call', route: '`steam://friends/message/<steamid>`', observed: true },
@@ -124,7 +133,7 @@ const CATALOG = {
 	RemoteClientStartStream: { steam: 'nothing', route: 'none' },
 	StreamingClientConnection: { steam: 'nothing', route: 'none' },
 	FamilyInvite: { steam: 'family join page for that invite', route: '`steam://openurl/` + join page', serverType: 16 },
-	PlaytimeWarning: { steam: 'playtime dialog', route: 'none as a URL — the click bridge opens the playtime request dialog' },
+	PlaytimeWarning: { steam: 'playtime dialog', route: '`action:requestplaytime`' },
 	FamilyPurchaseRequest: { steam: 'family management, requests tab', route: '`steam://openurl/` + requests tab', serverType: 17 },
 	FamilyPurchaseRequestResponse: { steam: 'family management, requests tab', route: '`steam://openurl/` + requests tab', serverType: 19 },
 	ParentalFeatureRequest: { steam: 'family management, requests tab', route: '`steam://openurl/` + requests tab', serverType: 15 },
@@ -135,9 +144,9 @@ const CATALOG = {
 	RequestedGameAdded: { steam: 'library page after a package→app lookup', route: 'none — lookup unavailable here', serverType: 22 },
 	ClipDownloaded: { steam: 'that clip in the Media dialog', route: 'none — Media dialogs have no URL', serverType: 24 },
 	GameRecordingStart: { steam: 'explicit no-op', route: 'none' },
-	GameRecordingStop: { steam: 'that clip in the Media dialog', route: 'none as a URL — the click bridge opens that clip (`clip_id`; the media grid without one)' },
+	GameRecordingStop: { steam: 'that clip in the Media dialog', route: '`action:clip:<clip_id>`; `action:media` without a clip id' },
 	GameRecordingUserMarkerAdded: { steam: 'explicit no-op', route: 'none' },
-	GameRecordingInstantClip: { steam: 'that clip in the Media dialog', route: 'none as a URL — the click bridge opens that clip (`clip_id`; the media grid without one)' },
+	GameRecordingInstantClip: { steam: 'that clip in the Media dialog', route: '`action:clip:<clip_id>`; `action:media` without a clip id' },
 	PlaytestInvite: { steam: 'gated-access page for the app', route: '`steam://openurl/` + gated-access page', serverType: 28 },
 	TradeReversal: { steam: 'your trade history page', route: '`steam://openurl/` + trade history', serverType: 29 },
 	HardwareUpdateAvailable: { steam: 'Settings → Controller (desktop)', route: '`steam://settings/controller`' },
@@ -179,31 +188,31 @@ if (disagreements > 0) {
 const routed = rows.filter((r) => r.routed).length;
 const inert = rows.filter((r) => /nothing|dismiss only|no-op/.test(r.steam)).length;
 
-const doc = `<!-- GENERATED by tools/gen-types-table.mjs. Do not edit; run \`npm run gen:table\`. -->
+const doc = `<!-- GENERATED by tools/gen-types-table.mjs. Do not edit; run \`bun run gen:table\`. -->
 
 # Notification types
 
 Every value of \`EClientNotificationType\`: what Steam's own toast click does,
-and what this plugin emits for it. The actions were read out of Steam's shipped
-UI bundle; \`docs/steam-routing.md\` is the analysis this table summarizes,
+and which durable fallback this plugin can derive. The actions were read out of
+Steam's shipped UI bundle; \`docs/steam-routing.md\` is the analysis this table summarizes,
 with the citations. "observed" rows were additionally clicked on a real client
-with a Steam window focused. The routed count is derived by running the actual
-routing rules, not counted by hand.
+with a Steam window focused. The fallback count runs the URL and action rules
+with valid sample payloads; missing required data can still prevent a fallback.
 
-- **${routed}** types route.
-- **${inert}** types are inert in Steam itself: a click only dismisses, and so does ours.
-- The remainder open dialogs no URL can reach. Five of them (the chat room,
-  media items, the playtime dialog) act anyway: the click bridge opens the same
-  dialog through Steam's own doors, on whichever surface is focused. The rest
-  stay inert here too.
+- **${routed}** types have a durable fallback, including media and playtime action tokens
+- **${inert}** types are inert in Steam itself: a click only dismisses
+- Exact replay is independent of this catalog: a proved callback can run on its
+  captured surface during the same Steam session even when this table says none
+- Group chat has no durable fallback; its room dispatcher needs session-only
+  toast context, so a missing callback or changed surface leaves the click inert
 - "server" types arrive from the web notification system; their payload is
   \`body_data\` JSON on the toast's React object, not a client protobuf.
 
-| # | Type | Steam's click does | We emit | Basis |
+| # | Type | Steam's click does | Durable fallback | Basis |
 |---|---|---|---|---|
 ${rows.map((r) => `| ${r.index} | \`${r.name}\` | ${r.steam} | ${r.route} | ${r.basis} |`).join('\n')}
 `;
 
 mkdirSync(join(root, 'docs'), { recursive: true });
 writeFileSync(join(root, 'docs', 'notification-types.md'), doc);
-console.log(`generated docs/notification-types.md (${rows.length} types, ${routed} route)`);
+console.log(`generated docs/notification-types.md (${rows.length} types, ${routed} durable fallbacks)`);
