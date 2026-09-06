@@ -80,9 +80,9 @@ activation target. Windows launches or forwards Steam, and the registered URL
 handler dispatches the envelope. Existing setup, artwork, focus pulse, and
 payload validation remain unchanged.
 
-A notification-center row remains actionable after Steam restart. Reboot
-support is conditional on Windows retaining that row. Validation must measure
-this rather than infer it.
+A retained notification-center row is designed to remain actionable after a
+Steam restart. Task 7 must verify that behavior and determine whether Windows
+retains an actionable row across a VM reboot.
 
 ## Deliver on Linux
 
@@ -90,15 +90,15 @@ this rather than infer it.
 
 - The standard `notify-send` default action waits for a live click, then runs
   `steam <canonical-url>`. It no longer writes `.click`.
-- The helper remains detached from Steam, so restarting Steam does not remove a
-  still-live FreeDesktop action.
+- The detached helper is designed to keep a still-live FreeDesktop action
+  available across a Steam restart. Task 6 must verify that behavior.
 - The helper requests a 30-second timeout. This reaches Quattro's current
-  normal-urgency maximum and improves the live click window without claiming
-  persistence.
+  normal-urgency maximum and is intended to extend the live click window
+  without claiming persistence.
 - When `GetServerInformation` identifies Quickshell, delivery also carries
-  `omarchy-exec-argv` with `["steam", "<canonical-url>"]`. Quattro persists
-  that fixed argv vector in its history JSON and can launch it after the
-  original helper, Steam, shell, or login session has ended.
+  `omarchy-exec-argv` with `["steam", "<canonical-url>"]`. Quattro is intended
+  to persist that fixed argv vector in its history JSON. Task 6 must verify
+  launch after the original helper, Steam, shell, or login session has ended.
 - Other daemons ignore the absent vendor adapter and use the standard action.
 
 FreeDesktop notification actions return an action identifier to the client;
@@ -111,9 +111,9 @@ a supported daemon demonstrates the need.
 Source:
 [Desktop Notifications Specification](https://specifications.freedesktop.org/notification/latest-single/).
 
-## Restart behavior
+## Intended restart behavior
 
-| state at click | result |
+| state at click | intended result |
 |---|---|
 | same Steam session and surface | exact captured callback |
 | same session, different surface | verified fallback against current focus |
@@ -145,7 +145,7 @@ Offline tests cover:
 - Windows activation XML
 - replay, fallback, surface mismatch, and malformed envelopes
 
-Linux live validation covers:
+Planned Linux live validation must cover:
 
 - FriendOnline and Achievement from the live banner
 - both types from Quattro history after the live popup expires
@@ -153,6 +153,7 @@ Linux live validation covers:
 - shell restart or login restart with retained history
 - desktop focus, matching game focus, and changed surface
 
-Windows live validation covers the same live/history, running/stopped Steam,
-desktop/game, and focus cases when the VM is available. A VM reboot determines
-whether Windows retains actionable notification history.
+Planned Windows live validation must cover the same live/history,
+running/stopped Steam, desktop/game, and focus cases when the VM is available.
+A VM reboot must determine whether Windows retains actionable notification
+history.
