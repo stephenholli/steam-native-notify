@@ -33,7 +33,18 @@ function call(method: string, params: Record<string, unknown>, timeoutMs = 5000)
 	const socket = mepSocketPath();
 	const request: Record<string, unknown> = { id: 'mep-cli', method };
 	if (Object.keys(params).length) request.params = params;
-	const body = encode(request as never);
+	const out = frame(encode(request as never));
+
+	// Bun sockets do not buffer: a write may take fewer bytes than offered,
+	// and the rest goes out from the drain callback.
+	let sent = 0;
+	const pump = (s: { write(data: Uint8Array): number }) => {
+		while (sent < out.length) {
+			const n = s.write(out.subarray(sent));
+			if (n <= 0) return;
+			sent += n;
+		}
+	};
 
 	// The reply arrives in chunks; they are joined once, when the length
 	// prefix says the whole frame is in.
@@ -52,7 +63,10 @@ function call(method: string, params: Record<string, unknown>, timeoutMs = 5000)
 			unix: socket,
 			socket: {
 				open(s) {
-					s.write(frame(body));
+					pump(s);
+				},
+				drain(s) {
+					pump(s);
 				},
 				data(s, chunk) {
 					chunks.push(chunk);

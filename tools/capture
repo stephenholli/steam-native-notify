@@ -23,7 +23,12 @@ import {
 	IS_WINDOWS, LOG, PLUGIN_ID, parseStamp, pluginLogPath, readPluginLog, stamp, starPath, steamConsoleLogPath, steamDir,
 } from './lib/snn';
 
-const lines = process.argv[2] ? Number.parseInt(process.argv[2], 10) : 8;
+const arg = process.argv[2];
+const lines = arg === undefined ? 8 : Number(arg);
+if (!Number.isSafeInteger(lines) || lines < 0) {
+	console.error('usage: tools/capture [n], n a non-negative integer (default 8)');
+	process.exit(2);
+}
 const repoRoot = dirname(dirname(import.meta.path));
 const plugin = readPluginLog();
 const hr = () => console.log('----------------------------------------------------------------');
@@ -146,6 +151,7 @@ if (IS_WINDOWS) {
 		console.log(`   delivered (notification database not readable: ${(e as Error).message})`);
 	}
 }
-const notifs = plugin.filter((l) => LOG.notification.test(l)).slice(-lines);
+const matched = plugin.filter((l) => LOG.notification.test(l));
+const notifs = matched.slice(Math.max(0, matched.length - lines));
 if (notifs.length) console.log(notifs.join('\n'));
 else console.log('   (no notifications captured yet -- trigger one)');

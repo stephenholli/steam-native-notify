@@ -9,11 +9,14 @@
 //
 // The live file is held open by WpnUserService, so it is copied first, and
 // the -wal and -shm files travel with it or the newest rows are missing from
-// the copy. The copy is the user's whole notification history, every app
-// included: it lives in a fresh temp directory for the duration of one read
-// and is removed before the rows are returned.
+// the copy. The files are copied one after another while the service may
+// write or checkpoint between them, so the copy is retried while the live
+// files change under it: the pair comes from one quiet moment. The copy is
+// the user's whole notification history, every app included: it lives in a
+// fresh temp directory for the duration of one read and is removed before
+// the rows are returned.
 import { Database } from 'bun:sqlite';
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PLUGIN_ID, localAppData } from './snn';
@@ -55,6 +58,20 @@ const SQL =
 	"where n.Type = 'toast' and h.PrimaryId = ? " +
 	'order by n.ArrivalTime desc, n.Id desc limit ?';
 
+const PARTS = ['', '-wal', '-shm'];
+
+/** Size and mtime of the database and its WAL: different between two readings when a write or checkpoint landed. */
+function generation(src: string): string {
+	return PARTS.slice(0, 2).map((ext) => {
+		try {
+			const st = statSync(src + ext);
+			return `${st.size}:${st.mtimeMs}`;
+		} catch {
+			return '-';
+		}
+	}).join('|');
+}
+
 /** The toasts this plugin delivered, newest first. */
 export function toastRows(limit = 10): ToastRow[] {
 	const src = join(localAppData(), 'Microsoft', 'Windows', 'Notifications', 'wpndatabase.db');
@@ -62,8 +79,12 @@ export function toastRows(limit = 10): ToastRow[] {
 	const dir = mkdtempSync(join(tmpdir(), 'snn-wpn-'));
 	try {
 		const copy = join(dir, 'wpndatabase.db');
-		for (const ext of ['', '-wal', '-shm']) {
-			if (existsSync(src + ext)) copyFileSync(src + ext, copy + ext);
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const before = generation(src);
+			for (const ext of PARTS) {
+				if (existsSync(src + ext)) copyFileSync(src + ext, copy + ext);
+			}
+			if (generation(src) === before) break;
 		}
 		const db = new Database(copy, { readonly: true, safeIntegers: true });
 		try {

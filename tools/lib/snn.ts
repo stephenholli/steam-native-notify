@@ -64,9 +64,13 @@ export function mepSocketPath(): string {
  * has loaded at least once. Null when absent or empty, never a throw.
  */
 function publishedSteamDir(): string | null {
-	const file = join(runtimeDir(), 'steam-dir');
-	if (!existsSync(file)) return null;
-	const dir = readFileSync(file, 'utf8').trim().replace(/[/\\]+$/, '');
+	let dir: string;
+	try {
+		dir = readFileSync(join(runtimeDir(), 'steam-dir'), 'utf8').trim().replace(/[/\\]+$/, '');
+	} catch {
+		// Absent, or removed by a backend load between one moment and the next.
+		return null;
+	}
 	return dir !== '' && existsSync(dir) ? dir : null;
 }
 
