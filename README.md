@@ -1,3 +1,5 @@
+Under Active Development
+
 # steam-native-notify
 
 A Millennium plugin that mirrors Steam's in-client notification toasts to the
@@ -78,45 +80,3 @@ each backend load); Millennium's loader lines are in
 `~/.steam/steam/logs/console-linux.txt` under `me.tysmith.steam-native-notify`.
 Every stage of a click logs one line, and every failure mode names itself —
 the vocabulary table is in `docs/architecture.md`.
-
-## Compatibility and known gaps
-
-- Linux with native Steam is the shipped target, with any FreeDesktop
-  notification daemon that supports actions. Without action support the
-  notification shows but the click does nothing. Flatpak and Snap Steam are
-  not supported by Millennium itself; the plugin's paths already know the
-  Flatpak layout, but nothing has run there. On macOS the backend loads,
-  logs that delivery is not implemented, and delivers nothing.
-- **Windows support is EXPERIMENTAL**, validated on real Windows 11 but not
-  in wide use. Notifications work — WinRT toasts through a PowerShell helper,
-  branded "Steam" with the artwork, persisting in the Action Center — and so
-  do clicks: a click replays Steam's own handler and lands where Steam would.
-  No vendored binaries; every registration is per-user and reversible. One
-  documented limitation: the Steam window does not come to the foreground on
-  a click — it updates behind whatever window has focus. Windows gives the
-  right to raise a window only to the process it activates, that process is a
-  short-lived `steam.exe` that forwards the URL and exits, and Steam's own
-  `steam://` activation behaves identically. `docs/platforms.md` records what
-  was tried and what would be needed. The
-  in-game half is further limited by Focus Assist, which suppresses toasts
-  during fullscreen games by default.
-- The 64-bit SteamRT3 client does not work: Millennium installs and reports
-  success there, but its hook does nothing
-  ([Millennium #840](https://github.com/SteamClientHomebrew/Millennium/issues/840)).
-- On Linux a notification is clickable only while its popup is up; the copy
-  in the notification centre is inert. quickshell 1.2 expires the popup
-  after about 8 seconds despite the no-timeout hint, which bounds the click
-  window. On Windows the toast persists in the Action Center and a click
-  there activates too, because Steam receives the click rather than a
-  short-lived helper.
-- The stashed click is frozen to the surface the toast rendered on: a
-  notification captured while a game was focused, clicked after that game
-  exits, does nothing. Clicks also expire 120 seconds after delivery and do
-  not survive a Steam restart or full quit.
-- A toast whose handler cannot be identified with proof stays unclickable by
-  design — never the wrong action. Notification types whose Steam click does
-  nothing are equally unclickable here: the plugin mirrors Steam, it does
-  not invent.
-- Some server-sent types (wishlist sales, comments, and others) never toast
-  unless enabled under Steam Settings > Notifications. Steam suppresses them
-  before this plugin sees anything.
