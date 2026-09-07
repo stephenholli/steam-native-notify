@@ -1,112 +1,85 @@
 import { Database } from 'bun:sqlite';
-import { describe, expect, test } from 'bun:test';
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { snapshot } from './lib/toastdb';
+import { PLUGIN_ID } from './lib/snn';
+import { readToasts, toastRows } from './lib/toastdb';
 
-// The snapshot algorithm on plain files: the copy hook stands in for
-// WpnUserService writing or checkpointing while the three files are copied
-// one after another.
-function scratch(): { src: string; dest: string; done: () => void } {
-	const dir = mkdtempSync(join(tmpdir(), 'snn-toastdb-test-'));
-	return { src: join(dir, 'live.db'), dest: join(dir, 'copy.db'), done: () => rmSync(dir, { recursive: true, force: true }) };
+const dirs: string[] = [];
+
+afterEach(() => {
+	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function scratch(): string {
+	const dir = mkdtempSync(join(tmpdir(), 'toastdb-test-'));
+	dirs.push(dir);
+	return dir;
 }
 
-describe('notification database snapshot', () => {
-	test('a quiet source is copied once, sidecars included', () => {
-		const { src, dest, done } = scratch();
+/** FILETIME: 100-nanosecond ticks since 1601, the units the platform stores in ArrivalTime. */
+function fileTime(ms: number): bigint {
+	return (BigInt(ms) + 11644473600000n) * 10000n;
+}
+
+// Enough of wpndatabase.db for the reader's query: the two tables it joins,
+// the columns it names, and a payload written the way the platform writes
+// one. The connection is returned still open and still holding the WAL.
+function writer(src: string, arrivals: number[]): Database {
+	const db = new Database(src, { create: true });
+	db.exec('pragma journal_mode = wal');
+	db.exec('create table NotificationHandler (RecordId integer primary key, PrimaryId text)');
+	db.exec('create table Notification (Id integer primary key, HandlerId integer, Type text, ArrivalTime integer, Payload blob)');
+	db.run('insert into NotificationHandler values (?, ?)', [1, PLUGIN_ID]);
+	db.run('insert into NotificationHandler values (?, ?)', [2, 'some.other.app']);
+	const insert = db.query('insert into Notification values (?, ?, ?, ?, ?)');
+	arrivals.forEach((ms, i) => {
+		insert.run(i + 1, 1, 'toast', fileTime(ms), Buffer.from(`<toast>${i + 1}</toast>`, 'utf16le'));
+	});
+	// Another app's toast and this plugin's payload-less condensed row: rows
+	// the query has to leave out.
+	insert.run(90, 2, 'toast', fileTime(arrivals[0] ?? 0), Buffer.from('<toast>other</toast>', 'utf16le'));
+	insert.run(91, 1, 'toastCondensed', fileTime(arrivals[0] ?? 0), null);
+	return db;
+}
+
+describe('reading the notification database', () => {
+	test('a read-only reader sees the rows a live writer has not checkpointed', () => {
+		const src = join(scratch(), 'wpndatabase.db');
+		const live = writer(src, [1_700_000_000_000, 1_700_000_060_000, 1_700_000_120_000]);
 		try {
-			writeFileSync(src, 'db-v1');
-			writeFileSync(src + '-wal', 'wal-v1');
-			writeFileSync(src + '-shm', 'shm');
-			const copied: string[] = [];
-			snapshot(src, dest, { copy: (from, to) => { copied.push(from.slice(src.length)); copyFileSync(from, to); } });
-			expect(copied).toEqual(['', '-wal', '-shm']);
-			expect(readFileSync(dest, 'utf8')).toBe('db-v1');
-			expect(readFileSync(dest + '-wal', 'utf8')).toBe('wal-v1');
+			// The writes are in the WAL, not the database file, and the writer
+			// still holds the connection open — the state the platform's own
+			// service leaves the file in.
+			expect(statSync(src + '-wal').size).toBeGreaterThan(0);
+			const rows = readToasts(src);
+			expect(rows.map((r) => r.id)).toEqual([3, 2, 1]);
+			expect(rows[0]!.arrived).toEqual(new Date(1_700_000_120_000));
+			expect(rows[0]!.xml).toBe('<toast>3</toast>');
 		} finally {
-			done();
+			live.close();
 		}
 	});
 
-	test('a WAL that vanished between copies does not survive from the earlier attempt', () => {
-		const { src, dest, done } = scratch();
+	test('the limit takes the newest rows', () => {
+		const src = join(scratch(), 'wpndatabase.db');
+		const live = writer(src, [1_700_000_000_000, 1_700_000_060_000, 1_700_000_120_000]);
 		try {
-			writeFileSync(src, 'db-v1');
-			writeFileSync(src + '-wal', 'wal-v1');
-			writeFileSync(src + '-shm', 'shm');
-			let copies = 0;
-			snapshot(src, dest, {
-				copy(from, to) {
-					copyFileSync(from, to);
-					// The first attempt has the database and the WAL; then a
-					// checkpoint folds the WAL into the database and deletes it.
-					if (++copies === 2) {
-						writeFileSync(src, 'db-v2-checkpointed');
-						rmSync(src + '-wal');
-						rmSync(src + '-shm');
-					}
-				},
-			});
-			expect(readFileSync(dest, 'utf8')).toBe('db-v2-checkpointed');
-			expect(existsSync(dest + '-wal')).toBe(false);
-			expect(existsSync(dest + '-shm')).toBe(false);
-			expect(copies).toBe(3);
+			expect(readToasts(src, 2).map((r) => r.id)).toEqual([3, 2]);
 		} finally {
-			done();
+			live.close();
 		}
 	});
 
-	test('a source that changes during every copy is an error, not the last copy', () => {
-		const { src, dest, done } = scratch();
+	test('a missing database is named, not a bare SQLite error', () => {
+		const before = process.env.LOCALAPPDATA;
+		process.env.LOCALAPPDATA = scratch();
 		try {
-			writeFileSync(src, 'db-v1');
-			writeFileSync(src + '-wal', 'wal-v1');
-			let writes = 0;
-			expect(() => snapshot(src, dest, {
-				attempts: 3,
-				copy(from, to) {
-					copyFileSync(from, to);
-					if (from === src + '-wal') writeFileSync(src + '-wal', `wal-v${++writes}-` + 'x'.repeat(writes));
-				},
-			})).toThrow(/changed during each of 3 copies/);
-			expect(writes).toBe(3);
+			expect(() => toastRows()).toThrow(/no notification database at .*wpndatabase\.db/);
 		} finally {
-			done();
-		}
-	});
-
-	test('with real SQLite: a checkpoint and writer close mid-copy still yields every row', () => {
-		const { src, dest, done } = scratch();
-		const writer = new Database(src);
-		try {
-			writer.exec('pragma journal_mode = wal');
-			writer.exec('create table t (id integer primary key)');
-			writer.exec('insert into t values (1)');
-			expect(existsSync(src + '-wal')).toBe(true);
-			snapshot(src, dest, {
-				copy(from, to) {
-					copyFileSync(from, to);
-					// After the WAL is copied: a second row, then the WAL is
-					// checkpointed into the database and gone with the writer.
-					if (from === src + '-wal') {
-						writer.exec('insert into t values (2)');
-						writer.exec('pragma wal_checkpoint(truncate)');
-						writer.close();
-					}
-				},
-			});
-			expect(existsSync(src + '-wal')).toBe(false);
-			const copy = new Database(dest, { readonly: true });
-			try {
-				expect(copy.query('select id from t order by id').all()).toEqual([{ id: 1 }, { id: 2 }]);
-			} finally {
-				copy.close();
-			}
-		} finally {
-			try { writer.close(); } catch {}
-			done();
+			if (before === undefined) delete process.env.LOCALAPPDATA;
+			else process.env.LOCALAPPDATA = before;
 		}
 	});
 });

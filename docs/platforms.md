@@ -53,7 +53,7 @@ in one directory per platform.
 | helper | `tools/notify-action` (POSIX sh, notify-send) | same, through the portal | Darwin branch of the same sh, terminal-notifier (plan) | `tools/notify-action.ps1` (WinRT toast), no vendored binary |
 | desktop entry / app identity | `steam` | `com.valvesoftware.Steam` | the sending bundle's identity | registry-only AUMID under HKCU, icon extracted from the user's steam.exe |
 | log | `<runtime>/plugin.log`; Millennium's loader lines in `~/.steam/steam/logs/console-linux.txt` | `<runtime>/plugin.log` in the per-app cache | `<runtime>/plugin.log` | `<runtime>\plugin.log` |
-| dev tools | `tools/fire`, `tools/capture`, `tools/mep` (bun scripts, `tools/lib/snn.ts` holds the paths) | need a `--flatpak` path switch (plan) | paths follow `backend/main.lua` (`~/Library/Caches`), unrun | the same files under `bun`; `tools/capture` also reads the notification database for the delivered XML |
+| dev tools | `tools/fire`, `tools/capture`, `tools/mep` (bun scripts, `tools/lib/snn.ts` holds the paths) | need a `--flatpak` path switch (plan) | the same files under `bun`; they resolve the macOS plugin and runtime paths themselves, unrun (delivery is refused there) | the same files under `bun`; `tools/capture` also reads the notification database for the delivered XML |
 
 Files in the runtime directory: `plugin.log` (truncated at each backend
 load; the helper appends its refusals there), the materialized helper
@@ -621,7 +621,6 @@ The private scheme and JScript handler were removed.
   Notification Center-only delivery on native Windows hardware
 - correct stale game focus after alt-tab for history clicks ([#14](https://github.com/tyvsmith/steam-native-notifications/issues/14));
   Linux X11 host detection is tracked separately in [#15](https://github.com/tyvsmith/steam-native-notifications/issues/15)
-- `fire.ps1` / `capture.ps1` tester tooling
 - `scenario="urgent"` opt-in for Focus Assist bypass
 - `-Teardown` validation
 - wider Windows, Steam, and Millennium coverage

@@ -70,14 +70,19 @@ tools/notify-action --resolve-icon <url>
 
 The three dev tools are bun scripts (`#!/usr/bin/env bun`, no extension) and
 run on every platform from the same files; on Windows prefix them with
-`bun` (`bun tools/fire TestFriendOnline`). Their shared paths and the log
-prefix contract live in `tools/lib/snn.ts`; `bun test tools/devtools.test.ts
-tools/toastdb.test.ts` pins the argument grammar, the msgpack framing, exact
-integers, the toast-XML reader and the notification-database snapshot.
+`bun` (`bun tools/fire TestFriendOnline`). Their shared paths live in
+`tools/lib/snn.ts`, which also mirrors the log-prefix contract `frontend/log.ts`
+owns; `bun test tools/devtools.test.ts tools/snn.test.ts tools/toastdb.test.ts`
+pins the argument grammar, the msgpack framing, exact integers, the toast-XML
+reader, the log-prefix regexes and platform paths, and the
+notification-database reader.
 
-Install: `bun install`, then `bun run build`; starlight packs the plugin into
-`~/.local/share/millennium/plugins/me.tysmith.steam-native-notifications.star`
-(building IS installing). Enable under Millennium > Plugins.
+Install: `bun install`, then `bun run build`; starlight packs the plugin as
+`me.tysmith.steam-native-notifications.star` into Millennium's plugins directory for
+the platform — `<Steam install>\millennium\plugins\` on Windows,
+`${XDG_DATA_HOME:-~/.local/share}/millennium/plugins/` on Linux,
+`~/Library/Application Support/Millennium/plugins/` on macOS — so building IS
+installing. Enable under Millennium > Plugins.
 
 Plugin log: `~/.cache/steam-native-notifications/plugin.log` (Windows:
 `%LOCALAPPDATA%\steam-native-notifications\plugin.log`), truncated at each
@@ -120,8 +125,9 @@ Run both, then confirm behaviour in the running client.
 
 **Diagnostics must never throw.** A debug log calling `JSON.stringify` on a
 BigInt silently killed every notification. Use `safeJson`; keep `dlog` wrapped.
-The log prefixes in `frontend/log.ts` are the contract `tools/capture` greps;
-renaming one blinds the triage tool.
+The log prefixes in `frontend/log.ts` own the vocabulary; `tools/lib/snn.ts`
+mirrors it for the tools and `tools/capture` greps it, so a renamed prefix
+blinds the triage tool until snn.ts follows.
 
 **Frontend-backend RPC is Millennium's `ffi` bridge, positional.**
 `ffi('Notify')(title, body, image, route, ingame, suppressPopup)` lands on the Lua parameters

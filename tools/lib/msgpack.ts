@@ -58,7 +58,10 @@ function encodeInto(w: Writer, v: Packable): void {
 		throw new Error('msgpack: bigint out of 64-bit range');
 	}
 	if (typeof v === 'number') {
-		if (Number.isInteger(v)) {
+		// Safe integers take the integer ladder, and every one of them fits a
+		// 64-bit rung. A double that is integral but larger (1e20, 2 ** 64) has
+		// no exact integer encoding at all, so it goes out as float64.
+		if (Number.isSafeInteger(v)) {
 			if (v >= 0 && v <= 0x7f) return w.bytes(v);
 			if (v < 0 && v >= -32) return w.bytes(0x100 + v);
 			if (v >= 0) {

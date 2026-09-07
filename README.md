@@ -34,7 +34,7 @@ bun run build
 
 Building **is** installing: starlight packs the plugin and writes it straight
 into Millennium's plugins directory —
-`~/.local/share/millennium/plugins/` on Linux, and
+`${XDG_DATA_HOME:-~/.local/share}/millennium/plugins/` on Linux, and
 `<Steam>\millennium\plugins\` on Windows (the Steam path comes from the
 registry). Then restart Steam and enable **Steam Native Notifications** under
 Millennium > Plugins. After any rebuild, restart Steam fully: `plugin.restart`

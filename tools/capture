@@ -11,8 +11,9 @@
 // logger output in memory, so backend/main.lua mirrors every line there,
 // truncated at each backend load. On Linux Steam's console-linux.txt carries
 // Millennium's loader lines too (the "Delegating frontend load" stamp that
-// dates the running frontend); elsewhere the running frontend is dated by the
-// newest hook verdict the frontend writes once per real start. On Windows
+// dates the running frontend); a Linux box without that log has no Steam that
+// has run, and the report stops there. Elsewhere the running frontend is dated
+// by the newest hook verdict the frontend writes once per real start. On Windows
 // section 3 also prints the newest toast Windows itself recorded, from the
 // notification platform's database, since the XML delivered and its launch
 // URL are not in the log there.
@@ -22,12 +23,21 @@ import { toastFacts } from './lib/devtools';
 import {
 	IS_WINDOWS, LOG, PLUGIN_ID, parseStamp, pluginLogPath, readPluginLog, stamp, starPath, steamConsoleLogPath, steamDir,
 } from './lib/snn';
+import { toastRows } from './lib/toastdb';
 
 const arg = process.argv[2];
 const lines = arg === undefined ? 8 : Number(arg);
 if (!Number.isSafeInteger(lines) || lines < 0) {
 	console.error('usage: tools/capture [n], n a non-negative integer (default 8)');
 	process.exit(2);
+}
+// On Linux Steam's console log is the only thing that dates the running
+// frontend from outside the plugin; no Steam directory, or no log in it, means
+// Steam has never run and the whole report would be guesswork.
+const consoleLog = steamConsoleLogPath();
+if (process.platform === 'linux' && !(consoleLog && existsSync(consoleLog))) {
+	console.error(`No Steam log at ${consoleLog ?? '<Steam>/logs/console-linux.txt'} -- is Steam installed and has it run?`);
+	process.exit(1);
 }
 const repoRoot = dirname(dirname(import.meta.path));
 const plugin = readPluginLog();
@@ -39,9 +49,7 @@ let built: Date | null = null;
 if (star && existsSync(star)) {
 	built = statSync(star).mtime;
 	console.log(`   built   ${stamp(built)}`);
-	const hasher = new Bun.CryptoHasher('sha256');
-	hasher.update(readFileSync(star));
-	console.log(`   sha256  ${hasher.digest('hex')}`);
+	console.log(`   sha256  ${Bun.CryptoHasher.hash('sha256', readFileSync(star), 'hex')}`);
 } else if (IS_WINDOWS && !steamDir()) {
 	console.log('   built   (no Steam install found: no published steam-dir, nothing in the registry)');
 } else {
@@ -51,8 +59,7 @@ if (star && existsSync(star)) {
 // The frontend's load stamp: Millennium's loader line where Steam's console
 // log has one, else the frontend's own hook verdict.
 let loaded: Date | null = null;
-const consoleLog = steamConsoleLogPath();
-if (consoleLog && existsSync(consoleLog)) {
+if (consoleLog) {
 	// Not valid UTF-8 throughout and full of ANSI colour.
 	const line = readFileSync(consoleLog, 'latin1')
 		.split('\n')
@@ -83,25 +90,22 @@ if (loaded) {
 
 // No rebuild here (bun run build would overwrite the running plugin), so the
 // working tree answers "would a build change anything" by mtime alone. The
-// build inputs are whatever millennium.toml names: every quoted path under
-// [frontend] and [backend] taken at its first segment (an entry pulls in its
-// tree), every [assets] path as the file it is, plus the manifest itself.
+// build inputs are whatever millennium.toml names, plus the manifest itself.
+// The three code sections -- [frontend], [backend] and the [webkit] one this
+// manifest deliberately omits -- name an entry or a glob, and each is taken at
+// its first path segment because an entry pulls in its whole tree. An [assets]
+// path is the one file it names. Every other section ([plugin], [compiler])
+// holds settings, not inputs.
+const CODE_SECTIONS = ['frontend', 'backend', 'webkit'];
 function newestSource(): { path: string; mtime: Date } | null {
 	const manifest = join(repoRoot, 'millennium.toml');
 	if (!existsSync(manifest)) return null;
+	const toml = Bun.TOML.parse(readFileSync(manifest, 'utf8')) as Record<string, Record<string, unknown> | undefined>;
+	// A section's values are strings and arrays of strings; flatten to paths.
+	const paths = (section: string): string[] => Object.values(toml[section] ?? {}).flat().filter((v) => typeof v === 'string');
 	const roots = new Set<string>(['millennium.toml']);
-	let section = '';
-	for (const line of readFileSync(manifest, 'utf8').split(/\r?\n/)) {
-		const s = /^\s*\[(\w+)\]/.exec(line);
-		if (s) {
-			section = s[1];
-			continue;
-		}
-		for (const m of line.matchAll(/"([^"]+)"/g)) {
-			if (section === 'frontend' || section === 'backend') roots.add(m[1].split('/')[0]);
-			else if (section === 'assets') roots.add(m[1]);
-		}
-	}
+	for (const section of CODE_SECTIONS) for (const p of paths(section)) roots.add(p.split('/')[0]);
+	for (const p of paths('assets')) roots.add(p);
 	let newest: { path: string; mtime: Date } | null = null;
 	const visit = (p: string) => {
 		if (!existsSync(p)) return;
@@ -137,21 +141,25 @@ console.log('== 3. what did the last notifications carry? ==');
 // shows what the walk stashed for each toast; `steam-url: click token=` +
 // `click-bridge:` + `replay: invoke` show what a click did with it, and
 // `focus:` is the backend's focus helper reporting the foreground it found.
-if (IS_WINDOWS) {
-	try {
-		const { toastRows } = await import('./lib/toastdb');
-		const row = toastRows(1)[0];
-		if (row) {
-			const f = toastFacts(row.xml);
-			console.log(`   delivered ${stamp(row.arrived)}  '${f.title}' / '${f.body}'  launch=${f.launch}`);
-		} else {
-			console.log(`   delivered (nothing recorded for ${PLUGIN_ID})`);
-		}
-	} catch (e) {
-		console.log(`   delivered (notification database not readable: ${(e as Error).message})`);
-	}
-}
 const matched = plugin.filter((l) => LOG.notification.test(l));
 const notifs = matched.slice(Math.max(0, matched.length - lines));
 if (notifs.length) console.log(notifs.join('\n'));
 else console.log('   (no notifications captured yet -- trigger one)');
+// Windows' own record, under its own heading below the log: the newest row is
+// the newest toast the platform accepted, which is not the outcome of the log
+// line above it. A delivery that failed leaves the previous successful toast
+// as the newest row, and the log lines say which of the two happened.
+if (IS_WINDOWS) {
+	console.log('   newest toast Windows recorded:');
+	try {
+		const row = toastRows(1)[0];
+		if (row) {
+			const f = toastFacts(row.xml);
+			console.log(`      ${stamp(row.arrived)}  '${f.title}' / '${f.body}'  launch=${f.launch}`);
+		} else {
+			console.log(`      (nothing recorded for ${PLUGIN_ID})`);
+		}
+	} catch (e) {
+		console.log(`      (notification database not readable: ${(e as Error).message})`);
+	}
+}

@@ -2,7 +2,8 @@
 // safe integer range, and JSON.parse rounds any literal past 2^53 to the
 // nearest double: 76561198300097684 comes back as 76561198300097680. The
 // reviver's source-text context (ES2025) keeps such literals as bigints, and
-// JSON.rawJSON prints a bigint back as the same digits. Bun 1.3 has both;
+// JSON.rawJSON prints a bigint back as the same digits. Bun has both from
+// 1.1.43, the engines floor in package.json;
 // TypeScript 5.9's lib does not declare them yet, hence the typed view below.
 const json = JSON as unknown as {
 	parse(text: string, reviver: (this: unknown, key: string, value: unknown, context: { source?: string }) => unknown): unknown;

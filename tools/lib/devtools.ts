@@ -7,9 +7,15 @@ export function isToken(s: string): boolean {
 	return /^[A-Za-z0-9_.-]+$/.test(s);
 }
 
-/** A JSON number literal, since these values are passed through as JSON. */
-export function isNumber(s: string): boolean {
-	return /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/.test(s);
+/**
+ * An appid and an ESteamNotificationType are both non-negative integers, so
+ * that is the domain, not "a JSON number": a fraction or an exponent parses
+ * fine and then means nothing to Steam. The safe-integer bound keeps the text
+ * this tool prints equal to the value it queues, which a 20-digit literal
+ * would not be once JSON.parse rounds it.
+ */
+export function isNonNegativeInteger(s: string): boolean {
+	return /^(0|[1-9]\d*)$/.test(s) && Number.isSafeInteger(Number(s));
 }
 
 const QUEUED = '(needs the tools/fire toggle on in the plugin settings; picked up within ~3s)';
@@ -34,16 +40,18 @@ export type FirePlan =
  * argument that is not one of them is refused, since no NotificationStore
  * method starts with a dash. Call arguments are JSON literals by contract,
  * and the whole argument list must parse before anything is written, so
- * "queued" is never printed for a command the frontend would drop.
+ * "queued" is never printed for a command the frontend would drop. An empty
+ * argument counts: in a subcommand slot that has a default it means "take the
+ * default", and everywhere else it is the value it looks like -- an empty
+ * method name, or an empty call argument, which is not a JSON literal.
  */
 export function planFire(argv: string[]): FirePlan {
-	const a = argv.filter((x) => x !== undefined && x !== '');
-	if (a.length === 0 || a[0] === '-h' || a[0] === '--help') return { kind: 'usage' };
-	const [head, ...rest] = a;
+	if (argv.length === 0 || argv[0] === '-h' || argv[0] === '--help') return { kind: 'usage' };
+	const [head, ...rest] = argv;
 
 	if (head === '--wishlist') {
-		const appid = rest[0] ?? '1073390';
-		if (!isNumber(appid)) return { kind: 'error', message: `an appid must be a number, got: ${appid}` };
+		const appid = rest[0] || '1073390';
+		if (!isNonNegativeInteger(appid)) return { kind: 'error', message: `an appid must be a non-negative integer, got: ${appid}` };
 		return {
 			kind: 'queue',
 			command: { server: { type: 8, body: { appid: JSON.parse(appid), count: 1 } } },
@@ -57,7 +65,7 @@ export function planFire(argv: string[]): FirePlan {
 		const call = rest[0];
 		if (!call) return { kind: 'error', message: '--replay needs a call (inspect or invoke)' };
 		if (call !== 'inspect' && call !== 'invoke') return { kind: 'error', message: `--replay call must be inspect or invoke, got: ${call}` };
-		const name = rest[1] ?? '';
+		const name = rest[1] || '';
 		if (name && !isToken(name)) return { kind: 'error', message: `a toast name must match [A-Za-z0-9_.-], got: ${name}` };
 		return {
 			kind: 'queue',
@@ -68,8 +76,8 @@ export function planFire(argv: string[]): FirePlan {
 	if (head === '--server') {
 		const type = rest[0];
 		if (!type) return { kind: 'error', message: '--server needs a numeric ESteamNotificationType' };
-		if (!isNumber(type)) return { kind: 'error', message: `a notification type must be a number, got: ${type}` };
-		const body = rest[1] ?? '{}';
+		if (!isNonNegativeInteger(type)) return { kind: 'error', message: `a notification type must be a non-negative integer, got: ${type}` };
+		const body = rest[1] || '{}';
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(body);
