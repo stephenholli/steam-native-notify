@@ -71,8 +71,9 @@ tools/notify-action --resolve-icon <url>
 The three dev tools are bun scripts (`#!/usr/bin/env bun`, no extension) and
 run on every platform from the same files; on Windows prefix them with
 `bun` (`bun tools/fire TestFriendOnline`). Their shared paths and the log
-prefix contract live in `tools/lib/snn.ts`; `bun test tools/devtools.test.ts`
-pins the argument grammar, the msgpack framing and the toast-XML reader.
+prefix contract live in `tools/lib/snn.ts`; `bun test tools/devtools.test.ts
+tools/toastdb.test.ts` pins the argument grammar, the msgpack framing, exact
+integers, the toast-XML reader and the notification-database snapshot.
 
 Install: `bun install`, then `bun run build`; starlight packs the plugin into
 `~/.local/share/millennium/plugins/me.tysmith.steam-native-notifications.star`

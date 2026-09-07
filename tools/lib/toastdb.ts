@@ -10,11 +10,12 @@
 // The live file is held open by WpnUserService, so it is copied first, and
 // the -wal and -shm files travel with it or the newest rows are missing from
 // the copy. The files are copied one after another while the service may
-// write or checkpoint between them, so the copy is retried while the live
-// files change under it: the pair comes from one quiet moment. The copy is
-// the user's whole notification history, every app included: it lives in a
-// fresh temp directory for the duration of one read and is removed before
-// the rows are returned.
+// write or checkpoint between them, so a copy counts only when the live
+// database and WAL are unchanged from before it began; otherwise it is
+// discarded and taken again, and a source that keeps changing is an error
+// rather than a stale answer. The copy is the user's whole notification
+// history, every app included: it lives in a fresh temp directory for the
+// duration of one read and is removed before the rows are returned.
 import { Database } from 'bun:sqlite';
 import { copyFileSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -62,7 +63,7 @@ const PARTS = ['', '-wal', '-shm'];
 
 /** Size and mtime of the database and its WAL: different between two readings when a write or checkpoint landed. */
 function generation(src: string): string {
-	return PARTS.slice(0, 2).map((ext) => {
+	return ['', '-wal'].map((ext) => {
 		try {
 			const st = statSync(src + ext);
 			return `${st.size}:${st.mtimeMs}`;
@@ -72,6 +73,40 @@ function generation(src: string): string {
 	}).join('|');
 }
 
+export interface SnapshotOptions {
+	/** Copies taken before giving up. */
+	attempts?: number;
+	/** The file copy, replaceable so a test can change the live files while a copy is in progress. */
+	copy?: (from: string, to: string) => void;
+}
+
+/**
+ * Copy the database and its WAL and shared-memory sidecars to `dest` so that
+ * the three files come from one quiet moment: a copy is accepted only when
+ * the live database and WAL are unchanged from before it began. Every attempt
+ * starts from nothing, so a sidecar that vanished from the source (a
+ * checkpoint folds the WAL into the database and deletes it) cannot survive
+ * from the previous attempt and replay rows the database has since absorbed.
+ * A file that vanishes between the existence check and its copy counts as a
+ * change; the generation check sends that attempt round again.
+ */
+export function snapshot(src: string, dest: string, { attempts = 3, copy = copyFileSync }: SnapshotOptions = {}): void {
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		for (const ext of PARTS) rmSync(dest + ext, { force: true });
+		const before = generation(src);
+		for (const ext of PARTS) {
+			if (!existsSync(src + ext)) continue;
+			try {
+				copy(src + ext, dest + ext);
+			} catch (e) {
+				if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+			}
+		}
+		if (generation(src) === before) return;
+	}
+	throw new Error(`${src} changed during each of ${attempts} copies; the notification service is busy, try again`);
+}
+
 /** The toasts this plugin delivered, newest first. */
 export function toastRows(limit = 10): ToastRow[] {
 	const src = join(localAppData(), 'Microsoft', 'Windows', 'Notifications', 'wpndatabase.db');
@@ -79,13 +114,7 @@ export function toastRows(limit = 10): ToastRow[] {
 	const dir = mkdtempSync(join(tmpdir(), 'snn-wpn-'));
 	try {
 		const copy = join(dir, 'wpndatabase.db');
-		for (let attempt = 0; attempt < 3; attempt++) {
-			const before = generation(src);
-			for (const ext of PARTS) {
-				if (existsSync(src + ext)) copyFileSync(src + ext, copy + ext);
-			}
-			if (generation(src) === before) break;
-		}
+		snapshot(src, copy);
 		const db = new Database(copy, { readonly: true, safeIntegers: true });
 		try {
 			return (db.query(SQL).all(PLUGIN_ID, BigInt(limit)) as RawRow[]).map((r) => ({

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { isNumber, isToken, parseMepParam, planFire, toastFacts } from './lib/devtools';
+import { formatJson, parseJson } from './lib/json';
 import { decode, encode, frame, takeFrame } from './lib/msgpack';
 
 describe('msgpack', () => {
@@ -123,6 +124,28 @@ describe('tools/mep parameters', () => {
 		expect(parseMepParam('value="go"')).toEqual(['value', 'go']);
 		expect(parseMepParam('key=a=b')).toEqual(['key', 'a=b']);
 		expect(() => parseMepParam('novalue')).toThrow(/key=value/);
+	});
+
+	test('integers beyond 2^53 keep every digit through a request and its reply', () => {
+		// A steamid64 is 17 digits; JSON.parse alone would round it to ...680.
+		const id = 76561198300097684n;
+		expect(parseMepParam('value=76561198300097684')).toEqual(['value', id]);
+		expect(parseMepParam('value=42')).toEqual(['value', 42]);
+		expect(parseMepParam('value="76561198300097684"')).toEqual(['value', '76561198300097684']);
+		expect(parseMepParam('body={"steamid":76561198300097684,"n":1}')).toEqual(['body', { steamid: id, n: 1 }]);
+		expect(parseJson('-9007199254740993')).toBe(-9007199254740993n);
+		expect(parseJson('9007199254740991')).toBe(9007199254740991);
+		expect(parseJson('1.5')).toBe(1.5);
+
+		const request = { id: 'mep-cli', method: 'plugin.config.set', params: { value: id } };
+		const wire = encode(request);
+		expect(Array.from(wire)).toContain(0xcf);
+		expect(decode(wire)).toEqual(request);
+
+		const printed = formatJson({ result: { steamid: id, small: 7 } });
+		expect(printed).toContain('"steamid": 76561198300097684');
+		expect(printed).toContain('"small": 7');
+		expect(parseJson(printed)).toEqual({ result: { steamid: id, small: 7 } });
 	});
 });
 

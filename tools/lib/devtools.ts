@@ -1,5 +1,6 @@
 // The pure halves of tools/fire and tools/mep, kept apart from the file and
 // socket work so tools/devtools.test.ts can pin their contracts.
+import { parseJson } from './json';
 
 /** What a dev-door name may look like: a NotificationStore Test* method, a toast name, a replay call. */
 export function isToken(s: string): boolean {
@@ -102,7 +103,7 @@ export function parseMepParam(token: string): [string, unknown] {
 	const key = token.slice(0, eq);
 	const raw = token.slice(eq + 1);
 	try {
-		return [key, JSON.parse(raw)];
+		return [key, parseJson(raw)];
 	} catch {
 		return [key, raw];
 	}

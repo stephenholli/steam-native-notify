@@ -19,6 +19,7 @@
 // on Windows (tools/lib/snn.ts); bun opens both. Runs on every platform
 // (on Windows: bun tools/mep ...).
 import { USEFUL_MEP_METHODS, parseMepParam } from './lib/devtools';
+import { formatJson } from './lib/json';
 import { decode, encode, frame, takeFrame } from './lib/msgpack';
 import { mepSocketPath, usageFromHeader } from './lib/snn';
 
@@ -128,5 +129,5 @@ try {
 } catch (e) {
 	fail((e as Error).message);
 }
-console.log(JSON.stringify(reply, (_k, v) => (typeof v === 'bigint' ? Number(v) : v), 2));
+console.log(formatJson(reply));
 process.exit(reply.error ? 1 : 0);
