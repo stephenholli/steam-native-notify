@@ -1,4 +1,4 @@
-import { findModuleExport } from 'millennium';
+import { ffi, findModuleExport } from 'millennium';
 import { dlog, safeJson } from './log';
 
 /**
@@ -17,6 +17,7 @@ import { dlog, safeJson } from './log';
  * steam://openexternalforpid parser builds.
  */
 let overlayStore: any;
+const gameHostFocus = ffi<[number], string>('GameHostFocus');
 
 /**
  * Live game-focus state, from the client's own signal. Steam places toasts by
@@ -75,7 +76,18 @@ export async function currentClickSurface(): Promise<{ runningAppId: number | nu
 		const focused = focusedOverlayAppId;
 		if (focused === null) return null;
 		if (focused !== undefined && focused > 0) {
-			return appids.includes(focused) ? { runningAppId: focused, focusedAppId: focused } : null;
+			if (!appids.includes(focused)) return null;
+			// Nested Gamescope can retain inner game focus after its host loses
+			// focus. Only a positively identified host may override Steam.
+			let host = 'unknown';
+			try {
+				const result = await gameHostFocus(focused);
+				host = result.startsWith('"') ? JSON.parse(result) : result;
+			} catch { /* An unavailable host probe leaves Steam's selection intact. */ }
+			// Even a rejected probe can outlive the focus state it queried.
+			if (focusedOverlayAppId !== focused) return null;
+			dlog(`focus-host: appid=${focused} result=${host}`);
+			return { runningAppId: focused, focusedAppId: host === 'desktop' ? 0 : focused };
 		}
 		if (appids.length === 0) return { runningAppId: null, focusedAppId: 0 };
 		return focused === 0 ? { runningAppId: appids[0], focusedAppId: 0 } : null;

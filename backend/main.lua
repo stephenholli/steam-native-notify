@@ -499,6 +499,18 @@ function TakeClick()
     return consume(join(RUNTIME_DIR, ".click"))
 end
 
+--- Steam tracks focus inside nested Gamescope, not necessarily its host window.
+--- The optional Linux probe only answers for a uniquely identified wrapper.
+---@ffi
+---@param appid number
+---@return string
+function GameHostFocus(appid)
+    local ok, result = pcall(function()
+        return require('game_focus').query(appid, PLATFORM)
+    end)
+    return ok and result or "unknown"
+end
+
 local function on_load()
     -- Directory first, then truncate: the session log starts fresh so that
     -- tools/capture never reads a previous session's lines as current.
