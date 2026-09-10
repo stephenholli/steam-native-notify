@@ -44,7 +44,42 @@ export type FirePlan =
  * argument counts: in a subcommand slot that has a default it means "take the
  * default", and everywhere else it is the value it looks like -- an empty
  * method name, or an empty call argument, which is not a JSON literal.
+ * Integer literals past the safe range are refused outright: the door's
+ * reader (frontend/settings.ts parseCallableJson) is a plain JSON.parse
+ * that would round them, so queueing one means printing digits that were
+ * never sent. A steamid goes through as a string.
  */
+/**
+ * JSON for a dev-door value: parsed exactly, then refused if any integer
+ * literal in it lies outside the safe range, since the door cannot carry it.
+ * Throws with the offending literal on a refusal, and a SyntaxError on
+ * malformed text, like JSON.parse.
+ */
+export function parseDoorJson(text: string): unknown {
+	const value = parseJson(text);
+	const wide = findBigInt(value);
+	if (wide !== null) throw new RangeError(`${wide} is wider than 2^53 and the dev door would round it; pass it as a string ("${wide}")`);
+	return value;
+}
+
+function findBigInt(v: unknown): bigint | null {
+	if (typeof v === 'bigint') return v;
+	if (Array.isArray(v)) {
+		for (const item of v) {
+			const hit = findBigInt(item);
+			if (hit !== null) return hit;
+		}
+		return null;
+	}
+	if (v && typeof v === 'object') {
+		for (const item of Object.values(v)) {
+			const hit = findBigInt(item);
+			if (hit !== null) return hit;
+		}
+	}
+	return null;
+}
+
 export function planFire(argv: string[]): FirePlan {
 	if (argv.length === 0 || argv[0] === '-h' || argv[0] === '--help') return { kind: 'usage' };
 	const [head, ...rest] = argv;
@@ -80,8 +115,9 @@ export function planFire(argv: string[]): FirePlan {
 		const body = rest[1] || '{}';
 		let parsed: unknown;
 		try {
-			parsed = JSON.parse(body);
-		} catch {
+			parsed = parseDoorJson(body);
+		} catch (e) {
+			if (e instanceof RangeError) return { kind: 'error', message: `--server body: ${e.message}` };
 			return { kind: 'error', message: `--server body must be JSON, got: ${body}` };
 		}
 		return {
@@ -97,8 +133,9 @@ export function planFire(argv: string[]): FirePlan {
 	const list = `[${rest.join(',')}]`;
 	let args: unknown[];
 	try {
-		args = JSON.parse(list);
-	} catch {
+		args = parseDoorJson(list) as unknown[];
+	} catch (e) {
+		if (e instanceof RangeError) return { kind: 'error', message: `call arguments: ${e.message}` };
 		return { kind: 'error', message: `call arguments must be JSON literals (quote strings), got: ${list}` };
 	}
 	return { kind: 'queue', command: { call: head, args }, message: `queued: ${head} ${list}  ${QUEUED}` };

@@ -158,6 +158,23 @@ describe('tools/fire argument grammar', () => {
 		expect(planFire(['--wishlist', '-5']).kind).toBe('error');
 	});
 
+	test('an integer literal past 2^53 is refused, never printed as sent', () => {
+		// The door's reader is a plain JSON.parse: 76561198300097684 would
+		// queue as 76561198300097680 while "queued:" printed the real digits.
+		const wide = '76561198300097684';
+		// One matcher per object: bun's toMatchObject writes an asymmetric
+		// matcher back into the received object, so a second look at .message
+		// would see the matcher, not the string.
+		const refused = { kind: 'error', message: expect.stringMatching(new RegExp(`${wide}.*pass it as a string`)) };
+		expect(planFire(['TestFriendMessage', wide, '"hi"'])).toMatchObject(refused);
+		expect(planFire(['--server', '9', `{"sender":{"id":[1,${wide}]}}`])).toMatchObject(refused);
+		// As a string it is exact and goes through.
+		expect(planFire(['TestFriendMessage', `"${wide}"`, '"hi"'])).toMatchObject({ kind: 'queue', command: { call: 'TestFriendMessage', args: [wide, 'hi'] } });
+		expect(planFire(['--server', '9', `{"sender":"${wide}"}`])).toMatchObject({ kind: 'queue', command: { server: { type: 9, body: { sender: wide } } } });
+		// Safe integers still pass as numbers, exactly.
+		expect(planFire(['TestAchievement', '570'])).toMatchObject({ kind: 'queue', command: { call: 'TestAchievement', args: [570] } });
+	});
+
 	test('an empty argument is the value it looks like, not a missing one', () => {
 		// An empty entry makes [,"hi"], which is not JSON; refusing before the
 		// write says so instead of printing "queued".
